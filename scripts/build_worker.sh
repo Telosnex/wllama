@@ -4,11 +4,13 @@ set -e
 
 CURRENT_PATH="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 
-# change to the llama.cpp directory
-cd $CURRENT_PATH
-cd ../llama.cpp
-BUILD_NUMBER="$(git rev-list --count HEAD)"
-SHORT_HASH="$(git rev-parse --short=7 HEAD)"
+# change to the llama.cpp directory. Allow the server-context POC to use the
+# fllama-pinned llama.cpp checkout without requiring it to be copied into
+# wllama/llama.cpp.
+LLAMA_CPP_DIR="${WLLAMA_LLAMA_CPP_DIR_HOST:-$CURRENT_PATH/../llama.cpp}"
+cd "$LLAMA_CPP_DIR"
+BUILD_NUMBER="$(git rev-list --count HEAD 2>/dev/null || echo 0)"
+SHORT_HASH="$(git rev-parse --short=7 HEAD 2>/dev/null || basename "$LLAMA_CPP_DIR")"
 
 # change to the root of the project
 cd $CURRENT_PATH

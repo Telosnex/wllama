@@ -9,9 +9,14 @@ services:
         RUN apt update && apt install -y git
       args:
         EMSDK_IMAGE_TAG: ${EMSDK_IMAGE_TAG}
+    environment:
+      WLLAMA_ENABLE_SERVER_CONTEXT_POC: ${WLLAMA_ENABLE_SERVER_CONTEXT_POC:-OFF}
+      WLLAMA_GGML_WEBGPU: ${WLLAMA_GGML_WEBGPU:-ON}
+      WLLAMA_LLAMA_CPP_DIR: ${WLLAMA_LLAMA_CPP_DIR:-/source/llama.cpp}
     user: "${D_UID}:${D_GID}"
     volumes:
       - ..:/source:Z
+      - ${WLLAMA_LLAMA_CPP_DIR_HOST:-../llama.cpp}:${WLLAMA_LLAMA_CPP_DIR:-/source/llama.cpp}:ro
     entrypoint: /bin/bash
     command:
       - -c
@@ -41,7 +46,7 @@ services:
           mkdir -p "$${build_dir}"
           cd "$${build_dir}"
           export EMCC_CFLAGS=""
-          emcmake cmake ../.. "$${cmake_flag}" -DEMDAWNWEBGPU_DIR="$${EMDAWNWEBGPU_DIR}"
+          emcmake cmake ../.. "$${cmake_flag}" -DEMDAWNWEBGPU_DIR="$${EMDAWNWEBGPU_DIR}" -DGGML_WEBGPU="$${WLLAMA_GGML_WEBGPU}" -DWLLAMA_ENABLE_SERVER_CONTEXT_POC="$${WLLAMA_ENABLE_SERVER_CONTEXT_POC}" -DWLLAMA_LLAMA_CPP_DIR="$${WLLAMA_LLAMA_CPP_DIR}"
           export EMCC_CFLAGS="$${emcc_flags}"
           emmake make wllama -j
           cd /source

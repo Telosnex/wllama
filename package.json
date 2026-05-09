@@ -47,7 +47,7 @@
     "clean": "rm -rf ./esm && rm -rf ./docs && rm -rf ./wasm",
     "build:worker": "./scripts/build_worker.sh",
     "build:glue": "node ./cpp/generate_glue_prototype.js",
-    "build:wasm": "./scripts/build_wasm.sh && npm run build:glue",
+    "build:wasm": "./scripts/build_wasm.sh && npm run build:glue && npm run build:worker",
     "build:tsup": "tsup --config tsup.config.ts",
     "build:minified": "terser esm/index.js -o esm/index.min.js --compress --mangle --source-map",
     "build:typedef": "tsc --emitDeclarationOnly --declaration -p tsconfig.build.json",

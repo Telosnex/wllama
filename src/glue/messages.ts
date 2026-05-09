@@ -3,7 +3,7 @@
 
 import type { GlueMessageProto } from './glue';
 
-export const GLUE_VERSION = 2;
+export const GLUE_VERSION = 3;
 
 export const GLUE_MESSAGE_PROTOTYPES: { [name: string]: GlueMessageProto } = {
   "erro_evt": {
@@ -1068,6 +1068,269 @@ export const GLUE_MESSAGE_PROTOTYPES: { [name: string]: GlueMessageProto } = {
         "isNullable": false
       }
     ]
+  },
+  "spld_req": {
+    "name": "spld_req",
+    "structName": "glue_msg_server_context_poc_load_req",
+    "className": "GlueMsgServerContextPocLoadReq",
+    "fields": [
+      {
+        "type": "str",
+        "name": "model_path",
+        "isNullable": false
+      },
+      {
+        "type": "bool",
+        "name": "use_webgpu",
+        "isNullable": true
+      },
+      {
+        "type": "int",
+        "name": "n_ctx",
+        "isNullable": true
+      },
+      {
+        "type": "int",
+        "name": "n_batch",
+        "isNullable": true
+      },
+      {
+        "type": "int",
+        "name": "n_ubatch",
+        "isNullable": true
+      },
+      {
+        "type": "int",
+        "name": "n_threads",
+        "isNullable": true
+      },
+      {
+        "type": "int",
+        "name": "n_gpu_layers",
+        "isNullable": true
+      },
+      {
+        "type": "int",
+        "name": "n_predict",
+        "isNullable": true
+      }
+    ]
+  },
+  "spld_res": {
+    "name": "spld_res",
+    "structName": "glue_msg_server_context_poc_load_res",
+    "className": "GlueMsgServerContextPocLoadRes",
+    "fields": [
+      {
+        "type": "bool",
+        "name": "success",
+        "isNullable": false
+      },
+      {
+        "type": "str",
+        "name": "message",
+        "isNullable": false
+      }
+    ]
+  },
+  "spcm_req": {
+    "name": "spcm_req",
+    "structName": "glue_msg_server_context_poc_completion_req",
+    "className": "GlueMsgServerContextPocCompletionReq",
+    "fields": [
+      {
+        "type": "str",
+        "name": "request_json",
+        "isNullable": false
+      },
+      {
+        "type": "str",
+        "name": "prompt",
+        "isNullable": true
+      },
+      {
+        "type": "str",
+        "name": "jinja_template",
+        "isNullable": true
+      },
+      {
+        "type": "str",
+        "name": "oaicompat_model",
+        "isNullable": true
+      },
+      {
+        "type": "int",
+        "name": "n_predict",
+        "isNullable": true
+      },
+      {
+        "type": "float",
+        "name": "temp",
+        "isNullable": true
+      },
+      {
+        "type": "float",
+        "name": "top_p",
+        "isNullable": true
+      },
+      {
+        "type": "float",
+        "name": "penalty_freq",
+        "isNullable": true
+      },
+      {
+        "type": "float",
+        "name": "penalty_repeat",
+        "isNullable": true
+      }
+    ]
+  },
+  "spoc_res": {
+    "name": "spoc_res",
+    "structName": "glue_msg_server_context_poc_res",
+    "className": "GlueMsgServerContextPocRes",
+    "fields": [
+      {
+        "type": "bool",
+        "name": "success",
+        "isNullable": false
+      },
+      {
+        "type": "str",
+        "name": "message",
+        "isNullable": false
+      },
+      {
+        "type": "str",
+        "name": "prompt",
+        "isNullable": false
+      },
+      {
+        "type": "str",
+        "name": "chat_format",
+        "isNullable": false
+      },
+      {
+        "type": "str",
+        "name": "reasoning_format",
+        "isNullable": false
+      },
+      {
+        "type": "arr_str",
+        "name": "chunks",
+        "isNullable": false
+      }
+    ]
+  },
+  "spun_req": {
+    "name": "spun_req",
+    "structName": "glue_msg_server_context_poc_unload_req",
+    "className": "GlueMsgServerContextPocUnloadReq",
+    "fields": []
+  },
+  "spun_res": {
+    "name": "spun_res",
+    "structName": "glue_msg_server_context_poc_unload_res",
+    "className": "GlueMsgServerContextPocUnloadRes",
+    "fields": [
+      {
+        "type": "bool",
+        "name": "success",
+        "isNullable": false
+      },
+      {
+        "type": "str",
+        "name": "message",
+        "isNullable": false
+      }
+    ]
+  },
+  "spoc_req": {
+    "name": "spoc_req",
+    "structName": "glue_msg_server_context_poc_req",
+    "className": "GlueMsgServerContextPocReq",
+    "fields": [
+      {
+        "type": "str",
+        "name": "model_path",
+        "isNullable": false
+      },
+      {
+        "type": "str",
+        "name": "request_json",
+        "isNullable": false
+      },
+      {
+        "type": "str",
+        "name": "prompt",
+        "isNullable": true
+      },
+      {
+        "type": "str",
+        "name": "jinja_template",
+        "isNullable": true
+      },
+      {
+        "type": "bool",
+        "name": "use_webgpu",
+        "isNullable": true
+      },
+      {
+        "type": "bool",
+        "name": "free_existing",
+        "isNullable": true
+      },
+      {
+        "type": "int",
+        "name": "n_ctx",
+        "isNullable": true
+      },
+      {
+        "type": "int",
+        "name": "n_batch",
+        "isNullable": true
+      },
+      {
+        "type": "int",
+        "name": "n_ubatch",
+        "isNullable": true
+      },
+      {
+        "type": "int",
+        "name": "n_threads",
+        "isNullable": true
+      },
+      {
+        "type": "int",
+        "name": "n_gpu_layers",
+        "isNullable": true
+      },
+      {
+        "type": "int",
+        "name": "n_predict",
+        "isNullable": true
+      },
+      {
+        "type": "float",
+        "name": "temp",
+        "isNullable": true
+      },
+      {
+        "type": "float",
+        "name": "top_p",
+        "isNullable": true
+      },
+      {
+        "type": "float",
+        "name": "penalty_freq",
+        "isNullable": true
+      },
+      {
+        "type": "float",
+        "name": "penalty_repeat",
+        "isNullable": true
+      }
+    ]
   }
 };
 
@@ -1454,5 +1717,83 @@ export interface GlueMsgChatFormatRes {
   formatted_chat: string;
 }
 
+// struct glue_msg_server_context_poc_load_req
+export interface GlueMsgServerContextPocLoadReq {
+  _name: "spld_req";
+  model_path: string;
+  use_webgpu?: boolean | undefined;
+  n_ctx?: number | undefined;
+  n_batch?: number | undefined;
+  n_ubatch?: number | undefined;
+  n_threads?: number | undefined;
+  n_gpu_layers?: number | undefined;
+  n_predict?: number | undefined;
+}
 
-export type GlueMsg = GlueMsgError | GlueMsgLoadReq | GlueMsgLoadRes | GlueMsgSetOptionsReq | GlueMsgSetOptionsRes | GlueMsgSamplingInitReq | GlueMsgSamplingInitRes | GlueMsgGetVocabReq | GlueMsgGetVocabRes | GlueMsgLookupTokenReq | GlueMsgLookupTokenRes | GlueMsgTokenizeReq | GlueMsgTokenizeRes | GlueMsgDetokenizeReq | GlueMsgDetokenizeRes | GlueMsgDecodeReq | GlueMsgDecodeRes | GlueMsgEncodeReq | GlueMsgEncodeRes | GlueMsgSamplingSampleReq | GlueMsgSamplingSampleRes | GlueMsgSamplingAcceptReq | GlueMsgSamplingAcceptRes | GlueMsgGetLogitsReq | GlueMsgGetLogitsRes | GlueMsgGetEmbeddingsReq | GlueMsgGetEmbeddingsRes | GlueMsgGetKvRemoveReq | GlueMsgGetKvRemoveRes | GlueMsgGetKvClearReq | GlueMsgGetKvClearRes | GlueMsgSessionSaveReq | GlueMsgSessionSaveRes | GlueMsgSessionLoadReq | GlueMsgSessionLoadRes | GlueMsgStatusReq | GlueMsgStatusRes | GlueMsgPerfContextReq | GlueMsgPerfContextRes | GlueMsgPerfResetReq | GlueMsgPerfResetRes | GlueMsgTestBenchmarkReq | GlueMsgTestBenchmarkRes | GlueMsgTestPerplexityReq | GlueMsgTestPerplexityRes | GlueMsgChatFormatReq | GlueMsgChatFormatRes;
+// struct glue_msg_server_context_poc_load_res
+export interface GlueMsgServerContextPocLoadRes {
+  _name: "spld_res";
+  success: boolean;
+  message: string;
+}
+
+// struct glue_msg_server_context_poc_completion_req
+export interface GlueMsgServerContextPocCompletionReq {
+  _name: "spcm_req";
+  request_json: string;
+  prompt?: string | undefined;
+  jinja_template?: string | undefined;
+  oaicompat_model?: string | undefined;
+  n_predict?: number | undefined;
+  temp?: number | undefined;
+  top_p?: number | undefined;
+  penalty_freq?: number | undefined;
+  penalty_repeat?: number | undefined;
+}
+
+// struct glue_msg_server_context_poc_res
+export interface GlueMsgServerContextPocRes {
+  _name: "spoc_res";
+  success: boolean;
+  message: string;
+  prompt: string;
+  chat_format: string;
+  reasoning_format: string;
+  chunks: string[];
+}
+
+// struct glue_msg_server_context_poc_unload_req
+export interface GlueMsgServerContextPocUnloadReq {
+  _name: "spun_req";
+}
+
+// struct glue_msg_server_context_poc_unload_res
+export interface GlueMsgServerContextPocUnloadRes {
+  _name: "spun_res";
+  success: boolean;
+  message: string;
+}
+
+// struct glue_msg_server_context_poc_req
+export interface GlueMsgServerContextPocReq {
+  _name: "spoc_req";
+  model_path: string;
+  request_json: string;
+  prompt?: string | undefined;
+  jinja_template?: string | undefined;
+  use_webgpu?: boolean | undefined;
+  free_existing?: boolean | undefined;
+  n_ctx?: number | undefined;
+  n_batch?: number | undefined;
+  n_ubatch?: number | undefined;
+  n_threads?: number | undefined;
+  n_gpu_layers?: number | undefined;
+  n_predict?: number | undefined;
+  temp?: number | undefined;
+  top_p?: number | undefined;
+  penalty_freq?: number | undefined;
+  penalty_repeat?: number | undefined;
+}
+
+
+export type GlueMsg = GlueMsgError | GlueMsgLoadReq | GlueMsgLoadRes | GlueMsgSetOptionsReq | GlueMsgSetOptionsRes | GlueMsgSamplingInitReq | GlueMsgSamplingInitRes | GlueMsgGetVocabReq | GlueMsgGetVocabRes | GlueMsgLookupTokenReq | GlueMsgLookupTokenRes | GlueMsgTokenizeReq | GlueMsgTokenizeRes | GlueMsgDetokenizeReq | GlueMsgDetokenizeRes | GlueMsgDecodeReq | GlueMsgDecodeRes | GlueMsgEncodeReq | GlueMsgEncodeRes | GlueMsgSamplingSampleReq | GlueMsgSamplingSampleRes | GlueMsgSamplingAcceptReq | GlueMsgSamplingAcceptRes | GlueMsgGetLogitsReq | GlueMsgGetLogitsRes | GlueMsgGetEmbeddingsReq | GlueMsgGetEmbeddingsRes | GlueMsgGetKvRemoveReq | GlueMsgGetKvRemoveRes | GlueMsgGetKvClearReq | GlueMsgGetKvClearRes | GlueMsgSessionSaveReq | GlueMsgSessionSaveRes | GlueMsgSessionLoadReq | GlueMsgSessionLoadRes | GlueMsgStatusReq | GlueMsgStatusRes | GlueMsgPerfContextReq | GlueMsgPerfContextRes | GlueMsgPerfResetReq | GlueMsgPerfResetRes | GlueMsgTestBenchmarkReq | GlueMsgTestBenchmarkRes | GlueMsgTestPerplexityReq | GlueMsgTestPerplexityRes | GlueMsgChatFormatReq | GlueMsgChatFormatRes | GlueMsgServerContextPocLoadReq | GlueMsgServerContextPocLoadRes | GlueMsgServerContextPocCompletionReq | GlueMsgServerContextPocRes | GlueMsgServerContextPocUnloadReq | GlueMsgServerContextPocUnloadRes | GlueMsgServerContextPocReq;

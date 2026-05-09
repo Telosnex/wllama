@@ -21,7 +21,7 @@
 #include <functional>
 
 // increase when messages change
-#define GLUE_VERSION 2
+#define GLUE_VERSION 3
 
 #define GLUE_MAGIC 0x45554c47 // "GLUE"
 #define GLUE_PROTO_ID_LEN 8
@@ -356,7 +356,7 @@ DEF_GLUE_ARR(raw, std::vector<char>, GLUE_DTYPE_ARRAY_RAW, {
 
 // Message base
 
-void glue_handler::serialize(glue_outbuf &output)
+inline void glue_handler::serialize(glue_outbuf &output)
 {
   output.clear();
   output.append_u32(GLUE_MAGIC);
@@ -406,7 +406,7 @@ void glue_handler::serialize(glue_outbuf &output)
   }
 }
 
-void glue_handler::deserialize(glue_inbuf &input)
+inline void glue_handler::deserialize(glue_inbuf &input)
 {
   uint32_t magic = input.read_u32();
   if (magic != GLUE_MAGIC)
@@ -904,4 +904,87 @@ struct glue_msg_chat_format_res
   GLUE_FIELD(bool, success)
   GLUE_FIELD(str, message)
   GLUE_FIELD(str, formatted_chat)
+};
+
+/////////
+// Proof-of-concept: call llama.cpp server_context/server_task directly.
+// This is intentionally coarse and blocking; it exists to test whether the
+// same server path native fllama uses can run inside wllama's browser harness.
+
+struct glue_msg_server_context_poc_load_req
+{
+  GLUE_HANDLER("spld_req")
+  GLUE_FIELD(str, model_path)
+  GLUE_FIELD_NULLABLE(bool, use_webgpu)
+  GLUE_FIELD_NULLABLE(int, n_ctx)
+  GLUE_FIELD_NULLABLE(int, n_batch)
+  GLUE_FIELD_NULLABLE(int, n_ubatch)
+  GLUE_FIELD_NULLABLE(int, n_threads)
+  GLUE_FIELD_NULLABLE(int, n_gpu_layers)
+  GLUE_FIELD_NULLABLE(int, n_predict)
+};
+
+struct glue_msg_server_context_poc_load_res
+{
+  GLUE_HANDLER("spld_res")
+  GLUE_FIELD(bool, success)
+  GLUE_FIELD(str, message)
+};
+
+struct glue_msg_server_context_poc_completion_req
+{
+  GLUE_HANDLER("spcm_req")
+  GLUE_FIELD(str, request_json)
+  GLUE_FIELD_NULLABLE(str, prompt)
+  GLUE_FIELD_NULLABLE(str, jinja_template)
+  GLUE_FIELD_NULLABLE(str, oaicompat_model)
+  GLUE_FIELD_NULLABLE(int, n_predict)
+  GLUE_FIELD_NULLABLE(float, temp)
+  GLUE_FIELD_NULLABLE(float, top_p)
+  GLUE_FIELD_NULLABLE(float, penalty_freq)
+  GLUE_FIELD_NULLABLE(float, penalty_repeat)
+};
+
+struct glue_msg_server_context_poc_res
+{
+  GLUE_HANDLER("spoc_res")
+  GLUE_FIELD(bool, success)
+  GLUE_FIELD(str, message)
+  GLUE_FIELD(str, prompt)
+  GLUE_FIELD(str, chat_format)
+  GLUE_FIELD(str, reasoning_format)
+  GLUE_FIELD(arr_str, chunks)
+};
+
+struct glue_msg_server_context_poc_unload_req
+{
+  GLUE_HANDLER("spun_req")
+};
+
+struct glue_msg_server_context_poc_unload_res
+{
+  GLUE_HANDLER("spun_res")
+  GLUE_FIELD(bool, success)
+  GLUE_FIELD(str, message)
+};
+
+struct glue_msg_server_context_poc_req
+{
+  GLUE_HANDLER("spoc_req")
+  GLUE_FIELD(str, model_path)
+  GLUE_FIELD(str, request_json)
+  GLUE_FIELD_NULLABLE(str, prompt)
+  GLUE_FIELD_NULLABLE(str, jinja_template)
+  GLUE_FIELD_NULLABLE(bool, use_webgpu)
+  GLUE_FIELD_NULLABLE(bool, free_existing)
+  GLUE_FIELD_NULLABLE(int, n_ctx)
+  GLUE_FIELD_NULLABLE(int, n_batch)
+  GLUE_FIELD_NULLABLE(int, n_ubatch)
+  GLUE_FIELD_NULLABLE(int, n_threads)
+  GLUE_FIELD_NULLABLE(int, n_gpu_layers)
+  GLUE_FIELD_NULLABLE(int, n_predict)
+  GLUE_FIELD_NULLABLE(float, temp)
+  GLUE_FIELD_NULLABLE(float, top_p)
+  GLUE_FIELD_NULLABLE(float, penalty_freq)
+  GLUE_FIELD_NULLABLE(float, penalty_repeat)
 };

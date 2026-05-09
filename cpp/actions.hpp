@@ -22,14 +22,19 @@
 struct app_t
 {
   ggml_backend_dev_t device = nullptr;
-  llama_model *model;
-  llama_context *ctx;
-  const llama_vocab *vocab;
+  llama_model *model = nullptr;
+  llama_context *ctx = nullptr;
+  const llama_vocab *vocab = nullptr;
   wcommon_sampler *ctx_sampling = nullptr;
   llama_batch batch = llama_batch_init(512, 0, 1);
   llama_tokens tokens;
   int32_t seed = LLAMA_DEFAULT_SEED;
 };
+
+glue_msg_server_context_poc_load_res action_server_context_poc_load(app_t &app, const char *req_raw);
+glue_msg_server_context_poc_res action_server_context_poc_completion(app_t &app, const char *req_raw);
+glue_msg_server_context_poc_unload_res action_server_context_poc_unload(app_t &app, const char *req_raw);
+glue_msg_server_context_poc_res action_server_context_poc(app_t &app, const char *req_raw);
 
 inline std::vector<char> convert_string_to_buf(std::string &input)
 {
@@ -97,12 +102,21 @@ private:
 
 void free_all(app_t &app)
 {
-  if (app.ctx != nullptr)
+  if (app.ctx != nullptr) {
     llama_free(app.ctx);
-  if (app.model != nullptr)
+    app.ctx = nullptr;
+  }
+  if (app.model != nullptr) {
     llama_model_free(app.model);
-  if (app.ctx_sampling != nullptr)
+    app.model = nullptr;
+  }
+  if (app.ctx_sampling != nullptr) {
     wcommon_sampler_free(app.ctx_sampling);
+    app.ctx_sampling = nullptr;
+  }
+  app.vocab = nullptr;
+  app.device = nullptr;
+  app.tokens.clear();
 }
 
 struct kv_dump
@@ -1000,3 +1014,4 @@ glue_msg_chat_format_res action_chat_format(app_t &app, const char *req_raw)
     return res;
   }
 }
+

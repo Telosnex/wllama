@@ -28,6 +28,9 @@ import type {
   GlueMsgPerfResetRes,
   GlueMsgSamplingAcceptRes,
   GlueMsgSamplingSampleRes,
+  GlueMsgServerContextPocLoadRes,
+  GlueMsgServerContextPocRes,
+  GlueMsgServerContextPocUnloadRes,
   GlueMsgSetOptionsRes,
   GlueMsgStatusRes,
   GlueMsgTestBenchmarkRes,
@@ -195,6 +198,47 @@ export interface CompletionOptions {
   stream?: boolean;
 }
 
+export interface ServerContextPocLoadOptions extends LoadModelConfig {
+  useWebGPU?: boolean;
+  /**
+   * POC only: when loading from a cached Model, open the OPFS file handle in
+   * the worker instead of copying the model into the WASM heap/MEMFS.
+   * Defaults to true for WebGPU, false for CPU until the path is validated.
+   */
+  useOpfs?: boolean;
+  nGpuLayers?: number;
+  nPredict?: number;
+}
+
+export interface ServerContextPocOptions {
+  modelPath?: string;
+  prompt?: string;
+  jinjaTemplate?: string;
+  useWebGPU?: boolean;
+  /**
+   * Reserved for a future non-double-load path. The current isolated POC
+   * implementation returns an error if this is true.
+   */
+  freeExisting?: boolean;
+  nCtx?: number;
+  nBatch?: number;
+  nUbatch?: number;
+  nThreads?: number;
+  nGpuLayers?: number;
+  nPredict?: number;
+  temp?: number;
+  topP?: number;
+  penaltyFreq?: number;
+  penaltyRepeat?: number;
+}
+
+export interface ServerContextPocResult {
+  prompt: string;
+  chatFormat: string;
+  reasoningFormat: string;
+  chunks: string[];
+}
+
 export interface ChatCompletionOptions {
   nPredict?: number;
   onNewToken?(
@@ -327,6 +371,8 @@ export class Wllama {
   private hasEncoder: boolean = false;
   private decoderStartToken: number = -1;
   private nCachedTokens: number = 0;
+  private loadedModelPaths: string[] = [];
+  private serverContextPocLoaded: boolean = false;
 
   constructor(pathConfig: AssetsPathConfig, wllamaConfig: WllamaConfig = {}) {
     checkEnvironmentCompatible();
@@ -669,6 +715,7 @@ export class Wllama {
           opfsCacheName: f.name,
         }))
       : blobs.map((blob, i) => ({ name: `model-${i}.gguf`, blob }));
+    this.loadedModelPaths = modelFiles.map((f) => `models/${f.name}`);
     await this.proxy.moduleInit(modelFiles);
     // run it
     const startResult: any = await this.proxy.wllamaStart();
@@ -689,7 +736,7 @@ export class Wllama {
       n_ctx: config.n_ctx || 1024,
       n_threads: this.nbThreads,
       n_ctx_auto: false, // not supported for now
-      model_paths: modelFiles.map((f) => `models/${f.name}`),
+      model_paths: this.loadedModelPaths,
       embeddings: config.embeddings,
       offload_kqv: config.offload_kqv,
       n_batch: config.n_batch,
@@ -1373,6 +1420,258 @@ export class Wllama {
   }
 
   /**
+   * POC only: download/cache/mount model files and load llama.cpp
+   * server_context as the sole C++ model owner. This intentionally skips
+   * wllama's normal `load` action, so it avoids the double-load from the
+   * one-shot `_serverContextPoc()` fallback path.
+   */
+  async _loadServerContextPoc(
+    ggufBlobsOrModel: Blob[] | Model,
+    config: ServerContextPocLoadOptions = {}
+  ): Promise<void> {
+    if (this.proxy) {
+      throw new WllamaError('Module is already initialized', 'load_error');
+    }
+    this.useWebGPU = config.useWebGPU ?? this.config.backend === 'webgpu';
+
+    const useOpfsLoad =
+      ggufBlobsOrModel instanceof Model &&
+      (config.useOpfs ?? this.useWebGPU);
+    let blobs: Blob[] = [];
+    if (!useOpfsLoad) {
+      blobs =
+        ggufBlobsOrModel instanceof Model
+          ? await ggufBlobsOrModel.open()
+          : [...(ggufBlobsOrModel as Blob[])];
+      if (blobs.some((b) => b.size === 0)) {
+        throw new WllamaError(
+          'Input model (or splits) must be non-empty Blob or File',
+          'load_error'
+        );
+      }
+      sortFileByShard(blobs);
+    }
+
+    const hasJspi = 'Suspending' in WebAssembly;
+    const hasMemory64 = hasJspi ? await isSupportMemory64() : false;
+    const useJspi = hasJspi && hasMemory64;
+    const multiThreadPath = this.pathConfig['asyncify/multi-thread/wllama.wasm'];
+    const singleThreadPath = useJspi
+      ? this.pathConfig['jspi/single-thread/wllama.wasm']
+      : this.pathConfig['asyncify/single-thread/wllama.wasm'];
+
+    if (hasJspi && !hasMemory64) {
+      this.logger().warn(
+        'JSPI is available but Memory64 is not supported, falling back to asyncify single-thread'
+      );
+    }
+
+    let serverContextPocLlamaThreads = config.n_threads ?? 1;
+    if (await isSupportMultiThread()) {
+      if (multiThreadPath) {
+        const hwConcurrency = Math.max(
+          1,
+          Math.floor((navigator.hardwareConcurrency || 1) / 2)
+        );
+        serverContextPocLlamaThreads = config.n_threads ?? hwConcurrency;
+        // server_context itself owns a long-running std::thread for
+        // start_loop(). Reserve one pthread for that loop in addition to the
+        // llama.cpp CPU worker threads, otherwise browser pthread builds can
+        // deadlock inside llama_decode() waiting for a worker that cannot be
+        // spawned from the exhausted pool.
+        this.nbThreads = Math.max(2, serverContextPocLlamaThreads + 1);
+        this.useMultiThread = true;
+      } else {
+        this.logger().warn(
+          'Missing paths to multi-thread build; server_context_poc cannot run without pthreads'
+        );
+      }
+    } else {
+      this.logger().warn(
+        'Multi-threads are not supported in this environment; server_context_poc cannot run without pthreads'
+      );
+    }
+
+    if (this.useWebGPU && !this.useMultiThread) {
+      throw new WllamaError(
+        'server_context_poc with WebGPU requires the asyncify/multi-thread wasm artifact',
+        'load_error'
+      );
+    }
+
+    const mPathConfig = this.useMultiThread
+      ? {
+          'wllama.wasm': absoluteUrl(multiThreadPath!),
+          'wllama.buildType': 'asyncify',
+          'wllama.useWebGPU': this.useWebGPU,
+        }
+      : {
+          'wllama.wasm': absoluteUrl(singleThreadPath!),
+          'wllama.buildType': useJspi ? 'jspi' : 'asyncify',
+          'wllama.memory64': useJspi,
+          'wllama.useWebGPU': this.useWebGPU,
+        };
+    this.proxy = new ProxyToWorker(
+      mPathConfig,
+      this.nbThreads,
+      this.config.suppressNativeLog ?? false,
+      this.logger()
+    );
+
+    const modelFiles = useOpfsLoad
+      ? (ggufBlobsOrModel as Model).files.map((f, i) => ({
+          name: `model-${i}.gguf`,
+          opfsCacheName: f.name,
+        }))
+      : blobs.map((blob, i) => ({ name: `model-${i}.gguf`, blob }));
+    this.loadedModelPaths = modelFiles.map((f) => `models/${f.name}`);
+
+    await this.proxy.moduleInit(modelFiles);
+    const startResult: any = await this.proxy.wllamaStart();
+    if (!startResult.success) {
+      throw new WllamaError(
+        `Error while calling start function, result = ${startResult}`
+      );
+    }
+
+    const loadResult = await this.proxy.wllamaAction<GlueMsgServerContextPocLoadRes>(
+      'server_context_poc_load',
+      {
+        _name: 'spld_req',
+        model_path: this.loadedModelPaths[0],
+        use_webgpu: this.useWebGPU,
+        n_ctx: config.n_ctx ?? 1024,
+        n_batch: config.n_batch,
+        n_ubatch: undefined,
+        n_threads: serverContextPocLlamaThreads,
+        n_gpu_layers:
+          config.nGpuLayers ?? (this.useWebGPU || config.useWebGPU ? 999 : 0),
+        n_predict: config.nPredict,
+      }
+    );
+    if (!loadResult.success) {
+      await this.exit();
+      throw new WllamaError(
+        `server_context_poc_load failed: ${loadResult.message}`,
+        'load_error'
+      );
+    }
+    this.serverContextPocLoaded = true;
+  }
+
+  /**
+   * POC only: load server_context from URL/cache without first loading
+   * wllama's normal app.model/app.ctx.
+   */
+  async _loadServerContextPocFromUrl(
+    modelUrl: string | string[],
+    config: ServerContextPocLoadOptions & DownloadOptions & { useCache?: boolean } = {}
+  ): Promise<void> {
+    const url: string = isString(modelUrl) ? (modelUrl as string) : modelUrl[0];
+    const useCache = config.useCache ?? true;
+    const model = useCache
+      ? await this.modelManager.getModelOrDownload(url, config)
+      : await this.modelManager.downloadModel(url, config);
+    return await this._loadServerContextPoc(model, config);
+  }
+
+  /**
+   * POC only: call llama.cpp server_context/server_task directly inside the
+   * wllama worker and return the raw server_task_result::to_json() chunks.
+   *
+   * This is intentionally not a stable public chat API. It exists to test
+   * whether the exact server path native fllama uses can run in wllama's
+   * browser/Emscripten harness.
+   */
+  async _serverContextPoc(
+    requestJson: string,
+    options: ServerContextPocOptions = {}
+  ): Promise<ServerContextPocResult> {
+    if (!this.proxy) {
+      throw new WllamaError(
+        '_loadServerContextPoc() or loadModel() is not yet called',
+        'model_not_loaded'
+      );
+    }
+
+    const modelPath = options.modelPath ?? this.loadedModelPaths[0];
+    if (!modelPath) {
+      throw new WllamaError('No model path is available for server_context POC');
+    }
+
+    const result = this.serverContextPocLoaded
+      ? await this.proxy.wllamaAction<GlueMsgServerContextPocRes>(
+          'server_context_poc_completion',
+          {
+            _name: 'spcm_req',
+            request_json: requestJson,
+            prompt: options.prompt,
+            jinja_template: options.jinjaTemplate,
+            oaicompat_model: modelPath,
+            n_predict: options.nPredict,
+            temp: options.temp,
+            top_p: options.topP,
+            penalty_freq: options.penaltyFreq,
+            penalty_repeat: options.penaltyRepeat,
+          }
+        )
+      : await this.proxy.wllamaAction<GlueMsgServerContextPocRes>(
+          'server_context_poc',
+          {
+            _name: 'spoc_req',
+            model_path: modelPath,
+            request_json: requestJson,
+            prompt: options.prompt,
+            jinja_template: options.jinjaTemplate,
+            use_webgpu: options.useWebGPU ?? this.useWebGPU,
+            free_existing: options.freeExisting ?? false,
+            n_ctx: options.nCtx ?? this.loadedContextInfo.n_ctx,
+            n_batch: options.nBatch ?? this.loadedContextInfo.n_batch,
+            n_ubatch: options.nUbatch,
+            n_threads: options.nThreads ?? this.nbThreads,
+            n_gpu_layers:
+              options.nGpuLayers ?? (this.useWebGPU || options.useWebGPU ? 999 : 0),
+            n_predict: options.nPredict,
+            temp: options.temp,
+            top_p: options.topP,
+            penalty_freq: options.penaltyFreq,
+            penalty_repeat: options.penaltyRepeat,
+          }
+        );
+    if (!result.success) {
+      throw new WllamaError(
+        `server_context_poc failed: ${result.message}`,
+        'inference_error'
+      );
+    }
+    return {
+      prompt: result.prompt,
+      chatFormat: result.chat_format,
+      reasoningFormat: result.reasoning_format,
+      chunks: result.chunks,
+    };
+  }
+
+  async _unloadServerContextPoc(): Promise<void> {
+    if (!this.proxy || !this.serverContextPocLoaded) {
+      return;
+    }
+    const result = await this.proxy.wllamaAction<GlueMsgServerContextPocUnloadRes>(
+      'server_context_poc_unload',
+      {
+        _name: 'spun_req',
+      }
+    );
+    if (!result.success) {
+      throw new WllamaError(
+        `server_context_poc_unload failed: ${result.message}`,
+        'load_error'
+      );
+    }
+    this.serverContextPocLoaded = false;
+  }
+
+  /**
    * Set options for underlaying llama_context
    */
   async setOptions(opt: ContextOptions): Promise<void> {
@@ -1392,6 +1691,8 @@ export class Wllama {
   async exit(): Promise<void> {
     await this.proxy?.wllamaExit();
     this.proxy = null as any;
+    this.serverContextPocLoaded = false;
+    this.loadedModelPaths = [];
   }
 
   /**

@@ -395,6 +395,20 @@ struct wcommon_params {
 //
 // String utils
 //
+// wllama links llama.cpp/common for the server_context POC. This local helper
+// file was copied/adapted from old common code and kept the same global
+// string_* utility names, which collide at link time. Prefix the local helper
+// symbols without touching call sites.
+#define string_format wllama_string_format
+#define string_strip wllama_string_strip
+#define string_get_sortable_timestamp wllama_string_get_sortable_timestamp
+#define string_join wllama_string_join
+#define string_split wllama_string_split
+#define string_repeat wllama_string_repeat
+#define string_replace_all wllama_string_replace_all
+#define string_parse_kv_override wllama_string_parse_kv_override
+#define string_process_escapes wllama_string_process_escapes
+#define string_from wllama_string_from
 
 #ifdef __GNUC__
 #ifdef __MINGW32__

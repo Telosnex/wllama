@@ -9,6 +9,10 @@ cd $CURRENT_PATH
 
 export D_UID=$UID
 export D_GID=$GID
+export WLLAMA_ENABLE_SERVER_CONTEXT_POC=${WLLAMA_ENABLE_SERVER_CONTEXT_POC:-OFF}
+export WLLAMA_GGML_WEBGPU=${WLLAMA_GGML_WEBGPU:-ON}
+export WLLAMA_LLAMA_CPP_DIR=${WLLAMA_LLAMA_CPP_DIR:-/source/llama.cpp}
+export WLLAMA_LLAMA_CPP_DIR_HOST=${WLLAMA_LLAMA_CPP_DIR_HOST:-../llama.cpp}
 
 if [[ $(uname -m) == "arm64" ]]; then
   echo "Running on ARM64 processor"
