@@ -24,26 +24,19 @@ const webgpuPocTest =
     ? test.sequential
     : test.sequential.skip;
 
-function parseServerChunkObjects(chunks: string[]) {
-  return chunks.flatMap((chunk) => {
-    const parsed = JSON.parse(chunk);
-    return Array.isArray(parsed) ? parsed : [parsed];
-  });
-}
-
 async function expectTinyCompletion(wllama: Wllama) {
-  const result = await wllama._serverContextPoc(
-    JSON.stringify({
+  const result = await wllama.createServerChatCompletion(
+    {
       messages: [{ role: 'user', content: 'Say hi.' }],
-    }),
+    },
     { nPredict: 8 }
   );
 
-  expect(result.prompt).toContain('Say hi.');
-  expect(result.chunks.length).toBeGreaterThan(0);
-  expect(result.chunks.some((chunk) => chunk.includes('chat.completion'))).toBe(
-    true
-  );
+  expect(result.debug.prompt).toContain('Say hi.');
+  expect(result.rawChunks.length).toBeGreaterThan(0);
+  expect(
+    result.rawChunks.some((chunk) => chunk.includes('chat.completion'))
+  ).toBe(true);
 }
 
 pocTest('server_context POC loads without normal wllama loadModel()', async () => {
@@ -52,7 +45,7 @@ pocTest('server_context POC loads without normal wllama loadModel()', async () =
   });
 
   try {
-    await wllama._loadServerContextPocFromUrl(TINY_MODEL, {
+    await wllama.loadServerModelFromUrl(TINY_MODEL, {
       useWebGPU: false,
       useOpfs: false,
       n_ctx: 512,
@@ -61,7 +54,7 @@ pocTest('server_context POC loads without normal wllama loadModel()', async () =
     });
 
     await expectTinyCompletion(wllama);
-    await wllama._unloadServerContextPoc();
+    await wllama.unloadServerModel();
   } finally {
     await wllama.exit();
   }
@@ -73,7 +66,7 @@ pocTest('server_context POC returns OpenAI tool_call chunks', async () => {
   });
 
   try {
-    await wllama._loadServerContextPocFromUrl(TOOL_MODEL, {
+    await wllama.loadServerModelFromUrl(TOOL_MODEL, {
       useWebGPU: false,
       useOpfs: false,
       n_ctx: 512,
@@ -81,8 +74,8 @@ pocTest('server_context POC returns OpenAI tool_call chunks', async () => {
       nPredict: 128,
     });
 
-    const result = await wllama._serverContextPoc(
-      JSON.stringify({
+    const result = await wllama.createServerChatCompletion(
+      {
         messages: [{ role: 'user', content: 'Call ping.' }],
         tools: [
           {
@@ -94,22 +87,26 @@ pocTest('server_context POC returns OpenAI tool_call chunks', async () => {
           },
         ],
         tool_choice: 'required',
-      }),
-      { nPredict: 128, temp: 0, topP: 1 }
+      },
+      { nPredict: 128, sampling: { temp: 0, top_p: 1 } }
     );
 
-    const chunkObjects = parseServerChunkObjects(result.chunks);
-    const choices = chunkObjects.flatMap((chunk) => chunk.choices ?? []);
+    const choices = result.chunks.flatMap(
+      (chunk) => (chunk as { choices?: unknown[] }).choices ?? []
+    );
     const serializedChoices = JSON.stringify(choices);
 
-    expect(result.chatFormat).toBe('Generic');
-    expect(result.prompt).toContain('Respond in JSON format');
+    expect(result.debug.chatFormat).toBe('Generic');
+    expect(result.debug.prompt).toContain('Respond in JSON format');
     expect(serializedChoices).toContain('tool_calls');
     expect(serializedChoices).toContain('ping');
     expect(
-      choices.some((choice) => choice.finish_reason === 'tool_calls')
+      choices.some(
+        (choice) =>
+          (choice as { finish_reason?: string }).finish_reason === 'tool_calls'
+      )
     ).toBe(true);
-    await wllama._unloadServerContextPoc();
+    await wllama.unloadServerModel();
   } finally {
     await wllama.exit();
   }
@@ -130,7 +127,7 @@ webgpuPocTest('server_context POC loads cached model with WebGPU', async () => {
     const model = await wllama.modelManager.getModelOrDownload(TINY_MODEL);
     expect(model.size).toBeGreaterThan(0);
 
-    await wllama._loadServerContextPocFromUrl(TINY_MODEL, {
+    await wllama.loadServerModelFromUrl(TINY_MODEL, {
       useWebGPU: true,
       useOpfs: false,
       n_ctx: 512,
@@ -139,7 +136,7 @@ webgpuPocTest('server_context POC loads cached model with WebGPU', async () => {
     });
 
     await expectTinyCompletion(wllama);
-    await wllama._unloadServerContextPoc();
+    await wllama.unloadServerModel();
   } finally {
     await wllama.exit();
   }
@@ -159,7 +156,7 @@ pocTest('server_context POC loads cached model directly from OPFS', async () => 
 
     window.fetch = () => Promise.reject(new Error('offline'));
 
-    await wllama._loadServerContextPocFromUrl(TINY_MODEL, {
+    await wllama.loadServerModelFromUrl(TINY_MODEL, {
       useWebGPU: false,
       useOpfs: true,
       n_ctx: 512,
@@ -168,7 +165,7 @@ pocTest('server_context POC loads cached model directly from OPFS', async () => 
     });
 
     await expectTinyCompletion(wllama);
-    await wllama._unloadServerContextPoc();
+    await wllama.unloadServerModel();
   } finally {
     window.fetch = origFetch;
     await wllama.exit();

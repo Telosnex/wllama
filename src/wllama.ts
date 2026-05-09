@@ -239,6 +239,36 @@ export interface ServerContextPocResult {
   chunks: string[];
 }
 
+export type ServerChatCompletionRequest = string | Record<string, unknown>;
+
+export interface ServerChatCompletionOptions {
+  /**
+   * Override the model string reported in OpenAI-compatible response chunks.
+   */
+  model?: string;
+  /**
+   * Optional custom jinja template passed to llama.cpp chat template handling.
+   */
+  jinjaTemplate?: string;
+  nPredict?: number;
+  sampling?: Pick<
+    SamplingConfig,
+    'temp' | 'top_p' | 'penalty_freq' | 'penalty_repeat'
+  >;
+}
+
+export interface ServerChatCompletionResult {
+  /** Parsed `server_task_result::to_json()` chunks, flattened when llama.cpp returns an array chunk. */
+  chunks: unknown[];
+  /** Raw JSON strings returned by llama.cpp. Useful for exact parity/debug comparisons. */
+  rawChunks: string[];
+  debug: {
+    prompt: string;
+    chatFormat: string;
+    reasoningFormat: string;
+  };
+}
+
 export interface ChatCompletionOptions {
   nPredict?: number;
   onNewToken?(
@@ -1417,6 +1447,99 @@ export class Wllama {
       throw new WllamaError('formatChat unknown error');
     }
     return result.formatted_chat;
+  }
+
+  /**
+   * Check if a model is loaded through the llama.cpp server_context path.
+   */
+  isServerModelLoaded(): boolean {
+    return this.serverContextPocLoaded;
+  }
+
+  /**
+   * Load a model through llama.cpp's server_context path.
+   *
+   * This path is intended for OpenAI-compatible chat completions and tool-call
+   * handling that reuse llama.cpp server_task response formatting. It is
+   * separate from `loadModel()`, which initializes wllama's traditional
+   * low-level llama_context path.
+   */
+  async loadServerModel(
+    ggufBlobsOrModel: Blob[] | Model,
+    config: ServerContextPocLoadOptions = {}
+  ): Promise<void> {
+    return await this._loadServerContextPoc(ggufBlobsOrModel, config);
+  }
+
+  /**
+   * Download/cache a model from URL and load it through llama.cpp's
+   * server_context path.
+   */
+  async loadServerModelFromUrl(
+    modelUrl: string | string[],
+    config: ServerContextPocLoadOptions & DownloadOptions & { useCache?: boolean } = {}
+  ): Promise<void> {
+    return await this._loadServerContextPocFromUrl(modelUrl, config);
+  }
+
+  /**
+   * Unload a model that was loaded through `loadServerModel()` or
+   * `loadServerModelFromUrl()`.
+   */
+  async unloadServerModel(): Promise<void> {
+    return await this._unloadServerContextPoc();
+  }
+
+  /**
+   * Create an OpenAI-compatible chat completion through llama.cpp's
+   * server_context/server_task path.
+   *
+   * The input may be an OpenAI-style request object or a pre-serialized JSON
+   * string. The returned `chunks` are parsed `server_task_result::to_json()`
+   * objects; `rawChunks` preserves the exact JSON strings for callers that need
+   * byte-for-byte debugging or parity checks.
+   */
+  async createServerChatCompletion(
+    request: ServerChatCompletionRequest,
+    options: ServerChatCompletionOptions = {}
+  ): Promise<ServerChatCompletionResult> {
+    const requestJson =
+      typeof request === 'string' ? request : JSON.stringify(request);
+    const serverOptions: ServerContextPocOptions = {};
+    if (options.model !== undefined) serverOptions.modelPath = options.model;
+    if (options.jinjaTemplate !== undefined) {
+      serverOptions.jinjaTemplate = options.jinjaTemplate;
+    }
+    if (options.nPredict !== undefined) serverOptions.nPredict = options.nPredict;
+    if (options.sampling?.temp !== undefined) {
+      serverOptions.temp = options.sampling.temp;
+    }
+    if (options.sampling?.top_p !== undefined) {
+      serverOptions.topP = options.sampling.top_p;
+    }
+    if (options.sampling?.penalty_freq !== undefined) {
+      serverOptions.penaltyFreq = options.sampling.penalty_freq;
+    }
+    if (options.sampling?.penalty_repeat !== undefined) {
+      serverOptions.penaltyRepeat = options.sampling.penalty_repeat;
+    }
+    const raw = await this._serverContextPoc(requestJson, serverOptions);
+    return {
+      chunks: this.parseServerChatCompletionChunks(raw.chunks),
+      rawChunks: raw.chunks,
+      debug: {
+        prompt: raw.prompt,
+        chatFormat: raw.chatFormat,
+        reasoningFormat: raw.reasoningFormat,
+      },
+    };
+  }
+
+  private parseServerChatCompletionChunks(rawChunks: string[]): unknown[] {
+    return rawChunks.flatMap((chunk) => {
+      const parsed = JSON.parse(chunk);
+      return Array.isArray(parsed) ? parsed : [parsed];
+    });
   }
 
   /**
