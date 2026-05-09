@@ -365,6 +365,11 @@ static glue_msg_server_context_poc_res run_completion(
           task_res->is_stop() ? 1 : 0,
           task_res->is_error() ? 1 : 0,
           chunk_json.size());
+#if defined(__EMSCRIPTEN__)
+      fprintf(stderr,
+          "@@WLLAMA_SERVER_CONTEXT_POC_CHUNK@@%s\n",
+          chunk_json.c_str());
+#endif
       chunks.push_back(std::move(chunk_json));
       if (task_res->is_error()) {
         break;

@@ -241,6 +241,13 @@ export interface ServerContextPocResult {
 
 export type ServerChatCompletionRequest = string | Record<string, unknown>;
 
+export interface ServerChatCompletionChunk {
+  /** Parsed `server_task_result::to_json()` chunk. */
+  chunk: unknown;
+  /** Raw JSON string returned by llama.cpp for this streamed chunk. */
+  rawChunk: string;
+}
+
 export interface ServerChatCompletionOptions {
   /**
    * Override the model string reported in OpenAI-compatible response chunks.
@@ -1503,8 +1510,60 @@ export class Wllama {
     request: ServerChatCompletionRequest,
     options: ServerChatCompletionOptions = {}
   ): Promise<ServerChatCompletionResult> {
-    const requestJson =
-      typeof request === 'string' ? request : JSON.stringify(request);
+    const requestJson = this.stringifyServerChatCompletionRequest(request);
+    const serverOptions = this.toServerContextPocOptions(options);
+    const raw = await this._serverContextPoc(requestJson, serverOptions);
+    return {
+      chunks: this.parseServerChatCompletionChunks(raw.chunks),
+      rawChunks: raw.chunks,
+      debug: {
+        prompt: raw.prompt,
+        chatFormat: raw.chatFormat,
+        reasoningFormat: raw.reasoningFormat,
+      },
+    };
+  }
+
+  /**
+   * Streaming variant of `createServerChatCompletion()`.
+   *
+   * The yielded chunks are emitted while llama.cpp's server_context is still
+   * generating. The final non-streaming response is still collected internally
+   * to surface completion errors from the underlying server_task path.
+   */
+  createServerChatCompletionStream(
+    request: ServerChatCompletionRequest,
+    options: ServerChatCompletionOptions = {}
+  ): Promise<AsyncIterable<ServerChatCompletionChunk>> {
+    const requestJson = this.stringifyServerChatCompletionRequest(request);
+    const serverOptions = this.toServerContextPocOptions(options);
+    return new Promise((resolve, reject) => {
+      const createGenerator = cbToAsyncIter(
+        (callback: (val?: ServerChatCompletionChunk, done?: boolean) => void) => {
+          this._serverContextPoc(requestJson, serverOptions, (rawChunk) => {
+            for (const chunk of this.parseServerChatCompletionChunks([rawChunk])) {
+              callback({ chunk, rawChunk }, false);
+            }
+          })
+            .catch(reject)
+            .then(() => {
+              callback(undefined, true);
+            });
+        }
+      );
+      resolve(createGenerator());
+    });
+  }
+
+  private stringifyServerChatCompletionRequest(
+    request: ServerChatCompletionRequest
+  ): string {
+    return typeof request === 'string' ? request : JSON.stringify(request);
+  }
+
+  private toServerContextPocOptions(
+    options: ServerChatCompletionOptions
+  ): ServerContextPocOptions {
     const serverOptions: ServerContextPocOptions = {};
     if (options.model !== undefined) serverOptions.modelPath = options.model;
     if (options.jinjaTemplate !== undefined) {
@@ -1523,16 +1582,7 @@ export class Wllama {
     if (options.sampling?.penalty_repeat !== undefined) {
       serverOptions.penaltyRepeat = options.sampling.penalty_repeat;
     }
-    const raw = await this._serverContextPoc(requestJson, serverOptions);
-    return {
-      chunks: this.parseServerChatCompletionChunks(raw.chunks),
-      rawChunks: raw.chunks,
-      debug: {
-        prompt: raw.prompt,
-        chatFormat: raw.chatFormat,
-        reasoningFormat: raw.reasoningFormat,
-      },
-    };
+    return serverOptions;
   }
 
   private parseServerChatCompletionChunks(rawChunks: string[]): unknown[] {
@@ -1708,7 +1758,8 @@ export class Wllama {
    */
   async _serverContextPoc(
     requestJson: string,
-    options: ServerContextPocOptions = {}
+    options: ServerContextPocOptions = {},
+    onChunk?: (rawChunk: string) => void
   ): Promise<ServerContextPocResult> {
     if (!this.proxy) {
       throw new WllamaError(
@@ -1722,8 +1773,12 @@ export class Wllama {
       throw new WllamaError('No model path is available for server_context POC');
     }
 
+    const runAction = onChunk
+      ? this.proxy.wllamaActionWithProgress.bind(this.proxy)
+      : this.proxy.wllamaAction.bind(this.proxy);
+
     const result = this.serverContextPocLoaded
-      ? await this.proxy.wllamaAction<GlueMsgServerContextPocRes>(
+      ? await runAction<GlueMsgServerContextPocRes>(
           'server_context_poc_completion',
           {
             _name: 'spcm_req',
@@ -1736,9 +1791,10 @@ export class Wllama {
             top_p: options.topP,
             penalty_freq: options.penaltyFreq,
             penalty_repeat: options.penaltyRepeat,
-          }
+          },
+          onChunk
         )
-      : await this.proxy.wllamaAction<GlueMsgServerContextPocRes>(
+      : await runAction<GlueMsgServerContextPocRes>(
           'server_context_poc',
           {
             _name: 'spoc_req',
@@ -1759,7 +1815,8 @@ export class Wllama {
             top_p: options.topP,
             penalty_freq: options.penaltyFreq,
             penalty_repeat: options.penaltyRepeat,
-          }
+          },
+          onChunk
         );
     if (!result.success) {
       throw new WllamaError(

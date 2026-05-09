@@ -42,6 +42,7 @@ interface Task {
   reject: any;
   param: TaskParam;
   buffers?: ArrayBuffer[] | undefined;
+  onProgress?: ((rawChunk: string) => void) | undefined;
 }
 
 export class ProxyToWorker {
@@ -153,12 +154,24 @@ export class ProxyToWorker {
     name: string,
     body: GlueMsg
   ): Promise<T> {
+    return await this.wllamaActionWithProgress<T>(name, body);
+  }
+
+  async wllamaActionWithProgress<T extends GlueMsg>(
+    name: string,
+    body: GlueMsg,
+    onProgress?: (rawChunk: string) => void
+  ): Promise<T> {
     const encodedMsg = glueSerialize(body);
-    const result = await this.pushTask({
-      verb: 'wllama.action',
-      args: [name, encodedMsg],
-      callbackId: this.taskId++,
-    });
+    const result = await this.pushTask(
+      {
+        verb: 'wllama.action',
+        args: [name, encodedMsg],
+        callbackId: this.taskId++,
+      },
+      undefined,
+      onProgress
+    );
     const parsedResult = glueDeserialize(result);
     return parsedResult as T;
   }
@@ -254,9 +267,13 @@ export class ProxyToWorker {
   /**
    * Push a new task to taskQueue
    */
-  private pushTask(param: TaskParam, buffers?: ArrayBuffer[]) {
+  private pushTask(
+    param: TaskParam,
+    buffers?: ArrayBuffer[],
+    onProgress?: (rawChunk: string) => void
+  ) {
     return new Promise<any>((resolve, reject) => {
-      this.taskQueue.push({ resolve, reject, param, buffers });
+      this.taskQueue.push({ resolve, reject, param, buffers, onProgress });
       this.runTaskLoop();
     });
   }
@@ -303,6 +320,10 @@ export class ProxyToWorker {
       return;
     } else if (verb === 'signal.abort') {
       this.abort(args[0]);
+      return;
+    } else if (verb === 'wllama.action.progress') {
+      this.onActionProgress(e.data.callbackId, args?.[0]);
+      return;
     }
 
     const { callbackId, result, err } = e.data;
@@ -320,6 +341,16 @@ export class ProxyToWorker {
         );
       }
     }
+  }
+
+  private onActionProgress(callbackId: number, rawChunk?: string) {
+    if (!callbackId || rawChunk === undefined) {
+      return;
+    }
+    const waitingTask = this.resultQueue.find(
+      (t) => t.param.callbackId === callbackId
+    );
+    waitingTask?.onProgress?.(rawChunk);
   }
 
   private abort(text: string) {

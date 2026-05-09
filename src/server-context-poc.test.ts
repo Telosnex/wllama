@@ -39,6 +39,25 @@ async function expectTinyCompletion(wllama: Wllama) {
   ).toBe(true);
 }
 
+async function expectTinyStreamingCompletion(wllama: Wllama) {
+  const stream = await wllama.createServerChatCompletionStream(
+    {
+      messages: [{ role: 'user', content: 'Say hi streamed.' }],
+    },
+    { nPredict: 8 }
+  );
+
+  const chunks = [];
+  for await (const chunk of stream) {
+    chunks.push(chunk);
+  }
+
+  expect(chunks.length).toBeGreaterThan(0);
+  expect(chunks.some((chunk) => chunk.rawChunk.includes('chat.completion'))).toBe(
+    true
+  );
+}
+
 pocTest('server_context POC loads without normal wllama loadModel()', async () => {
   const wllama = new Wllama(CONFIG_PATHS, {
     allowOffline: true,
@@ -54,6 +73,7 @@ pocTest('server_context POC loads without normal wllama loadModel()', async () =
     });
 
     await expectTinyCompletion(wllama);
+    await expectTinyStreamingCompletion(wllama);
     await wllama.unloadServerModel();
   } finally {
     await wllama.exit();
