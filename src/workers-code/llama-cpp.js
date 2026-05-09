@@ -49,15 +49,17 @@ const getWModuleConfig = (_argMainScriptBlob) => {
     printErr: function (text) {
       if (arguments.length > 1)
         text = Array.prototype.slice.call(arguments).join(' ');
+      const streamChunkPrefix = '@@WLLAMA_SERVER_CONTEXT_POC_CHUNK@@';
+      if (text.startsWith(streamChunkPrefix)) {
+        msg({
+          verb: 'wllama.action.progress',
+          callbackId: currentActionCallbackId,
+          args: [text.slice(streamChunkPrefix.length)],
+        });
+        return;
+      }
       const logLine = cppLogToJSLog(text);
       msg({ verb: 'console.' + logLine.level, args: [logLine.text] });
-    },
-    wllamaActionProgress: function (rawChunk) {
-      msg({
-        verb: 'wllama.action.progress',
-        callbackId: currentActionCallbackId,
-        args: [rawChunk],
-      });
     },
     locateFile: function (filename, basePath) {
       const p = pathConfig[filename];

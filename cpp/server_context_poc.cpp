@@ -12,7 +12,6 @@
 #include <vector>
 
 #if defined(__EMSCRIPTEN__)
-#include <emscripten.h>
 #include <emscripten/threading.h>
 #endif
 
@@ -367,12 +366,8 @@ static glue_msg_server_context_poc_res run_completion(
           task_res->is_error() ? 1 : 0,
           chunk_json.size());
 #if defined(__EMSCRIPTEN__)
-      EM_ASM(
-          {
-            if (Module.wllamaActionProgress) {
-              Module.wllamaActionProgress(UTF8ToString($0));
-            }
-          },
+      fprintf(stderr,
+          "@@WLLAMA_SERVER_CONTEXT_POC_CHUNK@@%s\n",
           chunk_json.c_str());
 #endif
       chunks.push_back(std::move(chunk_json));
