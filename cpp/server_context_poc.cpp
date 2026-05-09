@@ -1,6 +1,8 @@
 #include "glue.hpp"
 
 #include <algorithm>
+#include <cstdlib>
+#include <cstring>
 #include <cstdint>
 #include <exception>
 #include <map>
@@ -12,6 +14,7 @@
 #include <vector>
 
 #if defined(__EMSCRIPTEN__)
+#include <emscripten.h>
 #include <emscripten/threading.h>
 #endif
 
@@ -366,9 +369,19 @@ static glue_msg_server_context_poc_res run_completion(
           task_res->is_error() ? 1 : 0,
           chunk_json.size());
 #if defined(__EMSCRIPTEN__)
-      fprintf(stderr,
-          "@@WLLAMA_SERVER_CONTEXT_POC_CHUNK@@%s\n",
-          chunk_json.c_str());
+      char *chunk_copy = static_cast<char *>(std::malloc(chunk_json.size() + 1));
+      if (chunk_copy != nullptr) {
+        std::memcpy(chunk_copy, chunk_json.c_str(), chunk_json.size() + 1);
+        MAIN_THREAD_ASYNC_EM_ASM(
+            {
+              const rawChunk = UTF8ToString($0);
+              _free($0);
+              if (Module.wllamaActionProgress) {
+                Module.wllamaActionProgress(rawChunk);
+              }
+            },
+            chunk_copy);
+      }
 #endif
       chunks.push_back(std::move(chunk_json));
       if (task_res->is_error()) {
