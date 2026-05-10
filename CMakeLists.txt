@@ -42,8 +42,8 @@ set(THREADS_PREFER_PTHREAD_FLAG ON)
 
 set(WLLAMA_EXTRA_LIBS ggml llama ${CMAKE_THREAD_LIBS_INIT})
 if(WLLAMA_ENABLE_SERVER_CONTEXT_POC)
-  add_subdirectory("${WLLAMA_LLAMA_CPP_DIR}/common" "${CMAKE_CURRENT_BINARY_DIR}/llama.cpp-common")
   add_subdirectory("${WLLAMA_LLAMA_CPP_DIR}/vendor/cpp-httplib" "${CMAKE_CURRENT_BINARY_DIR}/llama.cpp-cpp-httplib")
+  add_subdirectory("${WLLAMA_LLAMA_CPP_DIR}/common" "${CMAKE_CURRENT_BINARY_DIR}/llama.cpp-common")
   add_subdirectory("${WLLAMA_LLAMA_CPP_DIR}/tools/mtmd" "${CMAKE_CURRENT_BINARY_DIR}/llama.cpp-mtmd")
 
   # Reuse the same non-HTTP server core fllama links natively.
@@ -54,15 +54,23 @@ if(WLLAMA_ENABLE_SERVER_CONTEXT_POC)
     ${WLLAMA_SERVER_SRC_DIR}/server-task.cpp
     ${WLLAMA_SERVER_SRC_DIR}/server-queue.cpp
     ${WLLAMA_SERVER_SRC_DIR}/server-common.cpp
+    ${WLLAMA_SERVER_SRC_DIR}/server-chat.cpp
     ${WLLAMA_SERVER_SRC_DIR}/server-context.cpp
   )
   target_include_directories(wllama-server-context-poc PUBLIC ${WLLAMA_SERVER_SRC_DIR})
   target_include_directories(wllama-server-context-poc PRIVATE
+    ${WLLAMA_LLAMA_CPP_DIR}/common
     ${WLLAMA_LLAMA_CPP_DIR}/tools/mtmd
+    ${WLLAMA_LLAMA_CPP_DIR}/vendor
     ${WLLAMA_LLAMA_CPP_DIR}
   )
-  target_link_libraries(wllama-server-context-poc PUBLIC common mtmd ${CMAKE_THREAD_LIBS_INIT})
-  list(APPEND WLLAMA_EXTRA_LIBS common cpp-httplib mtmd wllama-server-context-poc)
+  target_compile_features(wllama-server-context-poc PRIVATE cxx_std_17)
+  target_link_libraries(wllama-server-context-poc PUBLIC llama-common mtmd ${CMAKE_THREAD_LIBS_INIT})
+  list(APPEND WLLAMA_EXTRA_LIBS llama-common cpp-httplib mtmd wllama-server-context-poc)
+endif()
+
+if(WLLAMA_ENABLE_SERVER_CONTEXT_POC)
+  include_directories(${WLLAMA_LLAMA_CPP_DIR}/vendor)
 endif()
 
 set(WLLAMA_SRC cpp/wllama.cpp
@@ -81,5 +89,6 @@ include_directories(${WLLAMA_LLAMA_CPP_DIR}/tools/server)
 include_directories(${WLLAMA_LLAMA_CPP_DIR})
 
 add_executable(wllama ${WLLAMA_SRC})
+target_compile_features(wllama PRIVATE cxx_std_17)
 target_compile_definitions(wllama PRIVATE WLLAMA_ENABLE_SERVER_CONTEXT_POC=$<BOOL:${WLLAMA_ENABLE_SERVER_CONTEXT_POC}>)
 target_link_libraries(wllama PRIVATE ${WLLAMA_EXTRA_LIBS})

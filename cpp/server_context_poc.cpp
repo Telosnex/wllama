@@ -308,9 +308,14 @@ static glue_msg_server_context_poc_res run_completion(
     task.params.sampling.penalty_repeat = penalty_repeat;
   }
   if (is_oai) {
-    task.params.sampling.grammar = chat_params.grammar;
+    if (!chat_params.grammar.empty()) {
+      task.params.sampling.grammar = common_grammar(
+          COMMON_GRAMMAR_TYPE_TOOL_CALLS,
+          chat_params.grammar);
+    }
     task.params.sampling.grammar_lazy = chat_params.grammar_lazy;
     task.params.sampling.grammar_triggers = chat_params.grammar_triggers;
+    task.params.sampling.generation_prompt = chat_params.generation_prompt;
     task.params.antiprompt = chat_params.additional_stops;
     auto *lctx = g_server_context_poc.srv->get_llama_context();
     auto *model = llama_get_model(lctx);

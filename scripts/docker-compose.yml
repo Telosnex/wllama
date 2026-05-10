@@ -39,6 +39,7 @@ services:
           local build_dir="$2"
           local cmake_flag="$3"
           local extra_flags="$4"
+          local server_context_poc="$${5:-OFF}"
           local emcc_flags="$${COMMON_EMCC_FLAGS} $${extra_flags}"
           local output_dir="src/$${build_dir#wasm/}"
 
@@ -46,7 +47,7 @@ services:
           mkdir -p "$${build_dir}"
           cd "$${build_dir}"
           export EMCC_CFLAGS=""
-          emcmake cmake ../.. "$${cmake_flag}" -DEMDAWNWEBGPU_DIR="$${EMDAWNWEBGPU_DIR}" -DGGML_WEBGPU="$${WLLAMA_GGML_WEBGPU}" -DWLLAMA_ENABLE_SERVER_CONTEXT_POC="$${WLLAMA_ENABLE_SERVER_CONTEXT_POC}" -DWLLAMA_LLAMA_CPP_DIR="$${WLLAMA_LLAMA_CPP_DIR}"
+          emcmake cmake ../.. "$${cmake_flag}" -DEMDAWNWEBGPU_DIR="$${EMDAWNWEBGPU_DIR}" -DGGML_WEBGPU="$${WLLAMA_GGML_WEBGPU}" -DWLLAMA_ENABLE_SERVER_CONTEXT_POC="$${server_context_poc}" -DWLLAMA_LLAMA_CPP_DIR="$${WLLAMA_LLAMA_CPP_DIR}"
           export EMCC_CFLAGS="$${emcc_flags}"
           emmake make wllama -j
           cd /source
@@ -57,8 +58,12 @@ services:
           cp "$${build_dir}/wllama.wasm" "$${output_dir}"
         }
 
-        build_target "JSPI single-thread" "wasm/jspi-single-thread" "-DGGML_WEBGPU_JSPI=ON -DLLAMA_WASM_MEM64=ON" "-fwasm-exceptions -sJSPI -sJSPI_EXPORTS=['wllama_start','wllama_action'] -sMEMORY64=1"
+        # Keep the normal single-thread WebGPU artifacts close to upstream wllama.
+        # The server_context POC is only meaningful for the pthread artifact, and
+        # building every artifact with it makes it too easy to accidentally ship a
+        # JSPI wasm linked against a divergent llama.cpp/WebGPU checkout.
+        build_target "JSPI single-thread" "wasm/jspi-single-thread" "-DGGML_WEBGPU_JSPI=ON -DLLAMA_WASM_MEM64=ON" "-fwasm-exceptions -sJSPI -sJSPI_EXPORTS=['wllama_start','wllama_action'] -sMEMORY64=1" "OFF"
 
-        build_target "ASYNCIFY single-thread" "wasm/asyncify-single-thread" "-DGGML_WEBGPU_JSPI=OFF" "-fexceptions -sASYNCIFY=1"
+        build_target "ASYNCIFY single-thread" "wasm/asyncify-single-thread" "-DGGML_WEBGPU_JSPI=OFF" "-fexceptions -sASYNCIFY=1" "OFF"
 
-        build_target "ASYNCIFY multi-thread" "wasm/asyncify-multi-thread" "-DGGML_WEBGPU_JSPI=OFF" "-fexceptions -sASYNCIFY=1 -pthread -sUSE_PTHREADS=1 -sPTHREAD_POOL_SIZE=Module[\\\"pthreadPoolSize\\\"]"
+        build_target "ASYNCIFY multi-thread" "wasm/asyncify-multi-thread" "-DGGML_WEBGPU_JSPI=OFF" "-fexceptions -sASYNCIFY=1 -pthread -sUSE_PTHREADS=1 -sPTHREAD_POOL_SIZE=Module[\\\"pthreadPoolSize\\\"]" "$${WLLAMA_ENABLE_SERVER_CONTEXT_POC}"
