@@ -19,6 +19,7 @@ import type {
   GlueMsgEmbeddingRes,
   GlueMsgGetResultRes,
   GlueMsgLoadRes,
+  GlueMsgReleaseResultReaderRes,
 } from './glue/messages';
 import { LIBLLAMA_VERSION } from './workers-code/generated';
 import type {
@@ -494,7 +495,7 @@ export class Wllama {
       yarn_orig_ctx: params.yarn_orig_ctx,
       cache_type_k: params.cache_type_k as string,
       cache_type_v: params.cache_type_v as string,
-      n_parallel: 1, // only support single sequence for now
+      n_parallel: params.n_parallel ?? 1,
       kv_unified: false, // TODO: support kv unified cache
       flash_attn: params.flash_attn,
       swa_full: params.swa_full,
@@ -573,7 +574,7 @@ export class Wllama {
       );
     }
 
-    return await this.getRespose(options as any, false);
+    return await this.getRespose(options as any, false, result.request_id);
   }
 
   /**
@@ -653,7 +654,11 @@ export class Wllama {
       );
     }
 
-    return await this.getRespose(options as StreamParams<TChunk>, isStream);
+    return await this.getRespose(
+      options as StreamParams<TChunk>,
+      isStream,
+      result.request_id
+    );
   }
 
   /**
@@ -784,55 +789,82 @@ export class Wllama {
     };
   }
 
-  private async getRespose(options: StreamParams<any>, isStream: boolean) {
+  private async getRespose(
+    options: StreamParams<any>,
+    isStream: boolean,
+    requestId: number
+  ) {
     let finalResult: any = null;
+    let shouldReleaseReader = true;
 
-    while (true) {
-      if (options.abortSignal?.aborted) {
-        throw new WllamaAbortError();
-      }
-      const result_chunk = await this.proxy.wllamaAction<GlueMsgGetResultRes>(
-        'get_result',
-        {
-          _name: 'gres_req',
+    try {
+      while (true) {
+        if (options.abortSignal?.aborted) {
+          throw new WllamaAbortError();
         }
-      );
-
-      const jsonString = result_chunk.data_json;
-      if (!jsonString || jsonString.length === 0) {
-        if (!result_chunk.has_more) {
-          break;
-        } else {
-          continue;
-        }
-      }
-
-      let jsonData = this.jsonDecode(jsonString);
-      finalResult = jsonData;
-      if (result_chunk.is_error) {
-        this.logger().error('Model returned an error:', jsonData);
-        throw new WllamaError(
-          jsonData.message || 'Unknown inference error',
-          'inference_error'
+        const result_chunk = await this.proxy.wllamaAction<GlueMsgGetResultRes>(
+          'get_result',
+          {
+            _name: 'gres_req',
+            request_id: requestId,
+          }
         );
-      }
 
-      if (isStream) {
-        if (!Array.isArray(jsonData)) {
-          jsonData = [jsonData];
+        const jsonString = result_chunk.data_json;
+        if (!jsonString || jsonString.length === 0) {
+          if (!result_chunk.has_more) {
+            break;
+          } else {
+            continue;
+          }
         }
 
-        for (const chunk of jsonData) {
-          options.onData?.(chunk);
-          finalResult = chunk;
+        let jsonData = this.jsonDecode(jsonString);
+        finalResult = jsonData;
+        if (result_chunk.is_error) {
+          this.logger().error('Model returned an error:', jsonData);
+          throw new WllamaError(
+            jsonData.message || 'Unknown inference error',
+            'inference_error'
+          );
+        }
+
+        if (isStream) {
+          if (!Array.isArray(jsonData)) {
+            jsonData = [jsonData];
+          }
+
+          for (const chunk of jsonData) {
+            options.onData?.(chunk);
+            finalResult = chunk;
+          }
+        }
+
+        if (!result_chunk.has_more) {
+          shouldReleaseReader = false;
+          break;
         }
       }
 
-      if (!result_chunk.has_more) {
-        break;
+      return finalResult;
+    } finally {
+      if (shouldReleaseReader) {
+        try {
+          await this.releaseResultReader(requestId);
+        } catch (err) {
+          this.logger().warn('Failed to release result reader:', err);
+        }
       }
     }
+  }
 
-    return finalResult;
+  private async releaseResultReader(requestId: number) {
+    await this.proxy.wllamaAction<GlueMsgReleaseResultReaderRes>(
+      'release_result_reader',
+      {
+        _name: 'grrr_req',
+        request_id: requestId,
+      }
+    );
   }
 }

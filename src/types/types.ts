@@ -4,6 +4,9 @@ export interface LoadModelParams {
   seed?: number;
   n_ctx?: number;
   n_batch?: number;
+  // Experimental: number of parallel sequences supported by the llama.cpp context.
+  // Values > 1 allow multiple active completions on one Wllama instance.
+  n_parallel?: number;
   // by default, all layers are offloaded if WebGPU is available
   n_gpu_layers?: number;
   // by default, on multi-thread build, we take half number of available threads (hardwareConcurrency / 2)

@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <cmath>
 #include <fstream>
+#include <unordered_map>
 
 #include "llama.h"
 #include "common.h"
@@ -125,8 +126,11 @@ struct wllama_context
   std::function<bool()> should_stop = []()
   { return false; };
   std::string last_error;
-  // using unique_ptr to allow late initialization
-  std::unique_ptr<server_response_reader> rd;
+  // Multiple active readers allow multiple streaming completions to share one
+  // llama.cpp server context. Each JS stream receives a request_id and polls its
+  // own reader via action_get_result(request_id).
+  int next_request_id = 1;
+  std::unordered_map<int, std::unique_ptr<server_response_reader>> readers;
   std::unique_ptr<const server_context_meta> meta;
 
   struct console
@@ -142,7 +146,7 @@ struct wllama_context
 
   explicit wllama_context() {};
 
-  void create_completion_task(std::string &req_raw, std::vector<raw_buffer> &files, bool is_chat)
+  void create_completion_task(server_response_reader &reader, std::string &req_raw, std::vector<raw_buffer> &files, bool is_chat)
   {
     json body = json::parse(req_raw);
     task_response_type res_type = TASK_RESPONSE_TYPE_OAI_CMPL;
@@ -150,11 +154,60 @@ struct wllama_context
     if (is_chat)
     {
       std::vector<raw_buffer> dummy_files; // unused
-      json body_parsed = oaicompat_chat_params_parse(
-          body,
-          meta->chat_params,
-          dummy_files);
-      body = std::move(body_parsed);
+
+      // fllama/web parity with native fllama: allow each OpenAI chat request to
+      // provide its own Jinja template without making the template part of the
+      // loaded model identity. This lets function-calling and non-function
+      // requests share one llama.cpp server_context and batch together.
+      if (body.contains("jinja_template") && body["jinja_template"].is_string())
+      {
+        const std::string jinja_tmpl = body["jinja_template"].get<std::string>();
+        body.erase("jinja_template");
+
+        common_chat_templates_ptr request_templates;
+        try
+        {
+          request_templates = common_chat_templates_init(model, jinja_tmpl);
+
+          std::map<std::string, std::string> empty_kwargs;
+          common_chat_format_example(
+              request_templates.get(),
+              meta->chat_params.use_jinja,
+              empty_kwargs);
+        }
+        catch (...)
+        {
+          request_templates = common_chat_templates_init(model, "chatml");
+        }
+
+        server_chat_params request_chat_params = {
+            /* use_jinja             */ meta->chat_params.use_jinja,
+            /* prefill_assistant     */ meta->chat_params.prefill_assistant,
+            /* reasoning_format      */ meta->chat_params.reasoning_format,
+            /* chat_template_kwargs  */ meta->chat_params.chat_template_kwargs,
+            /* tmpls                 */ std::move(request_templates),
+            /* allow_image           */ meta->chat_params.allow_image,
+            /* allow_audio           */ meta->chat_params.allow_audio,
+            /* enable_thinking       */ meta->chat_params.enable_thinking,
+            /* reasoning_budget      */ meta->chat_params.reasoning_budget,
+            /* reasoning_budget_msg  */ meta->chat_params.reasoning_budget_message,
+            /* media_path            */ meta->chat_params.media_path,
+            /* force_pure_content    */ meta->chat_params.force_pure_content};
+
+        json body_parsed = oaicompat_chat_params_parse(
+            body,
+            request_chat_params,
+            dummy_files);
+        body = std::move(body_parsed);
+      }
+      else
+      {
+        json body_parsed = oaicompat_chat_params_parse(
+            body,
+            meta->chat_params,
+            dummy_files);
+        body = std::move(body_parsed);
+      }
       res_type = TASK_RESPONSE_TYPE_OAI_CHAT;
     }
 
@@ -163,7 +216,7 @@ struct wllama_context
 
       // TODO: reduce some copies here in the future
       server_task task = server_task(SERVER_TASK_TYPE_COMPLETION);
-      task.id = rd->get_new_id();
+      task.id = reader.get_new_id();
       task.index = 0;
       task.params = server_task::params_from_json_cmpl(
           vocab,
@@ -176,13 +229,13 @@ struct wllama_context
       task.cli_files = files;
       task.cli = true;
 
-      rd->post_task({std::move(task)});
+      reader.post_task({std::move(task)});
     }
   }
 
-  std::pair<server_task_result_ptr, bool> get_next_result()
+  std::pair<server_task_result_ptr, bool> get_next_result(server_response_reader &reader)
   {
-    server_task_result_ptr result = rd->next(should_stop);
+    server_task_result_ptr result = reader.next(should_stop);
     if (result)
     {
       const bool is_error = result->is_error();
@@ -416,7 +469,9 @@ struct wllama_context
     glue_msg_completion_res res;
 
     // prepare
-    rd = std::make_unique<server_response_reader>(ctx_server.get_response_reader());
+    const int request_id = next_request_id++;
+    auto reader = std::make_unique<server_response_reader>(ctx_server.get_response_reader());
+    auto &reader_ref = *reader;
     last_error = "";
     std::vector<raw_buffer> input_files;
     for (const auto &file : req.files.arr)
@@ -425,13 +480,15 @@ struct wllama_context
     }
 
     // create completion task and post to the queue
-    create_completion_task(req.data_json.value, input_files, req.is_chat.value);
+    create_completion_task(reader_ref, req.data_json.value, input_files, req.is_chat.value);
+    readers[request_id] = std::move(reader);
 
     res.success.value = true;
+    res.request_id.value = request_id;
     return res;
   }
 
-  void create_embedding_tasks(std::string &req_raw)
+  void create_embedding_tasks(server_response_reader &reader, std::string &req_raw)
   {
     json body = json::parse(req_raw);
 
@@ -468,13 +525,13 @@ struct wllama_context
     for (size_t i = 0; i < tokenized_prompts.size(); i++)
     {
       server_task task = server_task(SERVER_TASK_TYPE_EMBEDDING);
-      task.id = rd->get_new_id();
+      task.id = reader.get_new_id();
       task.tokens = std::move(tokenized_prompts[i]);
       task.params.res_type = TASK_RESPONSE_TYPE_OAI_EMBD;
       task.params.embd_normalize = embd_normalize;
       tasks.push_back(std::move(task));
     }
-    rd->post_tasks(std::move(tasks));
+    reader.post_tasks(std::move(tasks));
   }
 
   glue_msg_embedding_res action_embedding(const char *req_raw)
@@ -482,12 +539,16 @@ struct wllama_context
     PARSE_REQ(glue_msg_embedding_req);
     glue_msg_embedding_res res;
 
-    rd = std::make_unique<server_response_reader>(ctx_server.get_response_reader());
+    const int request_id = next_request_id++;
+    auto reader = std::make_unique<server_response_reader>(ctx_server.get_response_reader());
+    auto &reader_ref = *reader;
     last_error = "";
 
-    create_embedding_tasks(req.data_json.value);
+    create_embedding_tasks(reader_ref, req.data_json.value);
+    readers[request_id] = std::move(reader);
 
     res.success.value = true;
+    res.request_id.value = request_id;
     return res;
   }
 
@@ -496,8 +557,15 @@ struct wllama_context
     PARSE_REQ(glue_msg_get_result_req);
     glue_msg_get_result_res res;
 
+    auto reader_it = readers.find(req.request_id.value);
+    if (reader_it == readers.end())
+    {
+      throw app_exception("Unknown request_id: " + std::to_string(req.request_id.value));
+    }
+    auto &reader = *reader_it->second;
+
     bool has_more = run_loop();
-    auto [result, is_error] = get_next_result();
+    auto [result, is_error] = get_next_result(reader);
 
     json data_json;
     if (result)
@@ -519,10 +587,37 @@ struct wllama_context
       }
     }
 
+    const bool reader_done = result && (result->is_error() || (result->is_stop() && !reader.has_next()));
+    if (reader_done)
+    {
+      readers.erase(reader_it);
+      has_more = false;
+    }
+    else
+    {
+      has_more = has_more || reader.has_next();
+    }
+
     res.success.value = true;
     res.has_more.value = has_more;
     res.data_json.value = result ? data_json.dump() : "";
     res.is_error.value = is_error;
+    return res;
+  }
+
+  glue_msg_release_result_reader_res action_release_result_reader(const char *req_raw)
+  {
+    PARSE_REQ(glue_msg_release_result_reader_req);
+    glue_msg_release_result_reader_res res;
+
+    auto reader_it = readers.find(req.request_id.value);
+    if (reader_it != readers.end())
+    {
+      reader_it->second->stop();
+      readers.erase(reader_it);
+    }
+
+    res.success.value = true;
     return res;
   }
 };
@@ -624,16 +719,22 @@ void server_response::add_waiting_task_ids(const std::unordered_set<int> &id_tas
 
 void server_response::remove_waiting_task_ids(const std::unordered_set<int> &id_tasks)
 {
-  // no-op
+  queue_results.erase(
+      std::remove_if(queue_results.begin(), queue_results.end(), [&id_tasks](const server_task_result_ptr &result)
+                     { return result && id_tasks.find(result->id) != id_tasks.end(); }),
+      queue_results.end());
 }
 
-server_task_result_ptr server_response::recv(const std::unordered_set<int> &)
+server_task_result_ptr server_response::recv(const std::unordered_set<int> &id_tasks)
 {
   for (size_t i = 0; i < queue_results.size(); i++)
   {
-    server_task_result_ptr res = std::move(queue_results[i]);
-    queue_results.erase(queue_results.begin() + i);
-    return res;
+    if (id_tasks.find(queue_results[i]->id) != id_tasks.end())
+    {
+      server_task_result_ptr res = std::move(queue_results[i]);
+      queue_results.erase(queue_results.begin() + i);
+      return res;
+    }
   }
   return nullptr;
 }
@@ -727,6 +828,10 @@ server_task_result_ptr server_response_reader::next(const std::function<bool()> 
   {
     LOG_DBG("%s: received error result, stop further processing\n", __func__);
     stop();
+  }
+  if (result && result->is_stop())
+  {
+    received_count++;
   }
   return result;
 }

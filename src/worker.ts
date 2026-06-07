@@ -76,7 +76,7 @@ export class ProxyToWorker {
   taskQueue: Task[] = [];
   taskId: number = 1;
   resultQueue: Task[] = [];
-  busy = false; // is the work loop is running?
+  actionInFlight = false;
   worker?: Worker | undefined;
   pathConfig: any;
   multiThread: boolean;
@@ -290,28 +290,33 @@ export class ProxyToWorker {
   }
 
   /**
-   * Main loop for processing tasks
+   * Main loop for processing tasks.
+   *
+   * Emscripten/JSPI exports are not re-entrant-safe: an exported call can yield
+   * to JS while WebGPU / async FS work is in flight. Posting another exported
+   * call before the previous callback returns can corrupt shared glue buffers and
+   * crash the wasm runtime. Keep the worker protocol strictly one-action-at-a-
+   * time; concurrent streams are achieved by interleaving short `get_result`
+   * calls for different request ids.
    */
-  private async runTaskLoop() {
-    if (this.busy) {
-      return; // another loop is already running
+  private runTaskLoop() {
+    if (this.actionInFlight) {
+      return; // another task is already posted / awaiting callback
     }
-    this.busy = true;
-    while (true) {
-      const task = this.taskQueue.shift();
-      if (!task) break; // no more tasks
-      this.resultQueue.push(task);
-      // TODO @ngxson : Safari mobile doesn't support transferable ArrayBuffer
-      this.worker!!.postMessage(
-        task.param,
-        isSafariMobile()
-          ? undefined
-          : {
-              transfer: task.buffers ?? [],
-            }
-      );
-    }
-    this.busy = false;
+    const task = this.taskQueue.shift();
+    if (!task) return;
+
+    this.actionInFlight = true;
+    this.resultQueue.push(task);
+    // TODO @ngxson : Safari mobile doesn't support transferable ArrayBuffer
+    this.worker!!.postMessage(
+      task.param,
+      isSafariMobile()
+        ? undefined
+        : {
+            transfer: task.buffers ?? [],
+          }
+    );
   }
 
   /**
@@ -348,17 +353,21 @@ export class ProxyToWorker {
       );
       if (idx !== -1) {
         const waitingTask = this.resultQueue.splice(idx, 1)[0];
+        this.actionInFlight = false;
         if (err) waitingTask.reject(err);
         else waitingTask.resolve(result);
       } else {
+        this.actionInFlight = false;
         this.logger.error(
           `Cannot find waiting task with callbackId = ${callbackId}`
         );
       }
+      this.runTaskLoop();
     }
   }
 
   private abort(text: string) {
+    this.actionInFlight = false;
     while (this.resultQueue.length > 0) {
       const waitingTask = this.resultQueue.pop();
       if (!waitingTask) break;
@@ -368,5 +377,6 @@ export class ProxyToWorker {
         )
       );
     }
+    this.runTaskLoop();
   }
 }

@@ -279,6 +279,97 @@ test.sequential('generates chat completion using async iterator', async () => {
   await wllama.exit();
 });
 
+test.sequential('generates concurrent streaming chat completions', async () => {
+  const wllama = new Wllama(CONFIG_PATHS);
+
+  await wllama.loadModelFromUrl(TINY_MODEL, {
+    n_ctx: 1024,
+    n_parallel: 2,
+    seed: 42,
+  });
+
+  const startStream = async (index: number) => {
+    const stream = await wllama.createChatCompletion({
+      messages: [
+        { role: 'system', content: 'You are helpful.' },
+        { role: 'user', content: `Hi from request ${index}!` },
+      ],
+      max_tokens: 10,
+      temperature: 0.0,
+      stream: true,
+      onData: () => {},
+    });
+
+    let finalText = '';
+    for await (const chunk of stream) {
+      expect(chunk).toBeDefined();
+      expect(chunk.object).toBe('chat.completion.chunk');
+      const delta = chunk.choices[0].delta;
+      if (delta.content) {
+        finalText += delta.content;
+      }
+    }
+    return finalText;
+  };
+
+  const [first, second] = await Promise.all([startStream(0), startStream(1)]);
+
+  expect(first.length).toBeGreaterThan(0);
+  expect(second.length).toBeGreaterThan(0);
+
+  await wllama.exit();
+});
+
+test.sequential('cleans up abandoned streaming result readers', async () => {
+  const wllama = new Wllama(CONFIG_PATHS);
+
+  await wllama.loadModelFromUrl(TINY_MODEL, {
+    n_ctx: 1024,
+    n_parallel: 2,
+    seed: 42,
+  });
+
+  const abortController = new AbortController();
+  const firstStream = await wllama.createChatCompletion({
+    messages: [{ role: 'user', content: 'Tell me a short story.' }],
+    max_tokens: 32,
+    temperature: 0.0,
+    stream: true,
+    onData: () => {},
+    abortSignal: abortController.signal,
+  });
+
+  let chunks = 0;
+  for await (const _ of firstStream) {
+    chunks++;
+    if (chunks >= 2) {
+      abortController.abort();
+    }
+  }
+
+  expect(chunks).toBeGreaterThanOrEqual(2);
+
+  const secondStream = await wllama.createChatCompletion({
+    messages: [{ role: 'user', content: 'Hi!' }],
+    max_tokens: 10,
+    temperature: 0.0,
+    stream: true,
+    onData: () => {},
+  });
+
+  let finalText = '';
+  for await (const chunk of secondStream) {
+    const delta = chunk.choices[0].delta;
+    if (delta.content) {
+      finalText += delta.content;
+    }
+  }
+
+  expect(finalText.length).toBeGreaterThan(0);
+
+  await wllama.exit();
+});
+
 test.sequential('cleans up resources', async () => {
   const wllama = new Wllama(CONFIG_PATHS);
   await wllama.loadModelFromUrl(TINY_MODEL);
