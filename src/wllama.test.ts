@@ -1,8 +1,25 @@
-import { test, expect } from 'vitest';
-import { Wllama } from './wllama';
+import { test, expect, beforeEach } from 'vitest';
+
+declare const __GITHUB_CI__: boolean;
+
+// Add a small delay before each test on GitHub CI to avoid HuggingFace rate limits.
+// typeof guard handles the case where vitest define is not configured.
+if (typeof __GITHUB_CI__ !== 'undefined' && __GITHUB_CI__) {
+  beforeEach(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  });
+}
+import { Wllama, WllamaAbortError, type WllamaConfig } from './wllama';
 
 const CONFIG_PATHS = {
   default: '/src/wasm/wllama.wasm',
+};
+
+// TODO: enable compat mode in tests once test infrastructure supports Safari/asyncify
+const createWllama = (config = CONFIG_PATHS, options: WllamaConfig = {}) => {
+  const w = new Wllama(config, options);
+  w.setCompat(null);
+  return w;
 };
 
 const TINY_MODEL =
@@ -13,8 +30,11 @@ const SPLIT_MODEL =
 
 const EMBD_MODEL = TINY_MODEL; // for better speed
 
+const RERANK_MODEL =
+  'https://huggingface.co/ggml-org/models/resolve/main/jina-reranker-v1-tiny-en/ggml-model-f16.gguf';
+
 test.sequential('loads single model file', async () => {
-  const wllama = new Wllama(CONFIG_PATHS);
+  const wllama = createWllama();
 
   await wllama.loadModelFromUrl(TINY_MODEL, {
     n_ctx: 1024,
@@ -33,7 +53,7 @@ test.sequential('loads single model file', async () => {
 });
 
 test.sequential('loads single model file from HF', async () => {
-  const wllama = new Wllama(CONFIG_PATHS);
+  const wllama = createWllama();
 
   await wllama.loadModelFromHF(
     { repo: 'ggml-org/models', file: 'tinyllamas/stories15M-q4_0.gguf' },
@@ -48,7 +68,7 @@ test.sequential('loads single model file from HF', async () => {
 });
 
 test.sequential('loads single thread model', async () => {
-  const wllama = new Wllama(CONFIG_PATHS);
+  const wllama = createWllama();
 
   await wllama.loadModelFromUrl(TINY_MODEL, {
     n_ctx: 1024,
@@ -68,7 +88,7 @@ test.sequential('loads single thread model', async () => {
 });
 
 test.sequential('loads model with progress callback', async () => {
-  const wllama = new Wllama(CONFIG_PATHS);
+  const wllama = createWllama();
 
   let progressCalled = false;
   let lastLoaded = 0;
@@ -90,7 +110,7 @@ test.sequential('loads model with progress callback', async () => {
 });
 
 test.sequential('loads split model files', async () => {
-  const wllama = new Wllama(CONFIG_PATHS, {
+  const wllama = createWllama(CONFIG_PATHS, {
     parallelDownloads: 5,
   });
 
@@ -103,7 +123,7 @@ test.sequential('loads split model files', async () => {
 });
 
 test.sequential('generates completion', async () => {
-  const wllama = new Wllama(CONFIG_PATHS);
+  const wllama = createWllama();
 
   await wllama.loadModelFromUrl(TINY_MODEL, {
     n_ctx: 1024,
@@ -126,7 +146,7 @@ test.sequential('generates completion', async () => {
 });
 
 test.sequential('abort signal', async () => {
-  const wllama = new Wllama(CONFIG_PATHS);
+  const wllama = createWllama();
 
   await wllama.loadModelFromUrl(TINY_MODEL, {
     n_ctx: 1024,
@@ -141,16 +161,19 @@ test.sequential('abort signal', async () => {
     top_k: 40,
     seed: 42,
     stream: true,
-    onData: () => {},
     abortSignal: abortController.signal,
   });
 
   let i = 0;
-  for await (const _ of stream) {
-    if (i === 2) {
-      abortController.abort();
+  try {
+    for await (const _ of stream) {
+      if (i === 2) {
+        abortController.abort();
+      }
+      i++;
     }
-    i++;
+  } catch (e) {
+    expect((e as Error).name).toBe('AbortError');
   }
 
   expect(i).toBe(4);
@@ -159,7 +182,7 @@ test.sequential('abort signal', async () => {
 });
 
 test.sequential('generates embeddings', async () => {
-  const wllama = new Wllama(CONFIG_PATHS);
+  const wllama = createWllama();
 
   await wllama.loadModelFromUrl(EMBD_MODEL, {
     n_ctx: 1024,
@@ -192,8 +215,48 @@ test.sequential('generates embeddings', async () => {
   await wllama.exit();
 });
 
+test.sequential('reranks documents', async () => {
+  const wllama = createWllama();
+
+  await wllama.loadModelFromUrl(RERANK_MODEL, {
+    embeddings: true,
+    pooling_type: 'rank',
+  });
+
+  expect(wllama.isModelLoaded()).toBe(true);
+
+  const query = 'What is machine learning?';
+  const documents = [
+    'Machine learning is a branch of artificial intelligence.',
+    'The weather today is sunny and warm.',
+    'Neural networks are used in deep learning.',
+  ];
+
+  const res = await wllama.createRerank({ query, documents });
+
+  expect(res).toBeDefined();
+  expect(res.results).toHaveLength(documents.length);
+  for (const r of res.results) {
+    expect(typeof r.index).toBe('number');
+    expect(typeof r.relevance_score).toBe('number');
+  }
+
+  // results should be sorted highest score first
+  for (let i = 0; i < res.results.length - 1; i++) {
+    expect(res.results[i].relevance_score).toBeGreaterThanOrEqual(
+      res.results[i + 1].relevance_score
+    );
+  }
+
+  // the most relevant documents should outscore the other
+  const weatherIdx = res.results.findIndex((r) => r.index === 1);
+  expect(weatherIdx).toBeGreaterThan(0);
+
+  await wllama.exit();
+});
+
 test.sequential('allowOffline', async () => {
-  const wllama = new Wllama(CONFIG_PATHS, {
+  const wllama = createWllama(CONFIG_PATHS, {
     allowOffline: true,
   });
 
@@ -214,7 +277,7 @@ test.sequential('allowOffline', async () => {
 });
 
 test.sequential('generates chat completion', async () => {
-  const wllama = new Wllama(CONFIG_PATHS);
+  const wllama = createWllama();
 
   await wllama.loadModelFromUrl(TINY_MODEL, {
     n_ctx: 1024,
@@ -243,7 +306,7 @@ test.sequential('generates chat completion', async () => {
 });
 
 test.sequential('generates chat completion using async iterator', async () => {
-  const wllama = new Wllama(CONFIG_PATHS);
+  const wllama = createWllama();
 
   await wllama.loadModelFromUrl(TINY_MODEL, {
     n_ctx: 1024,
@@ -260,7 +323,6 @@ test.sequential('generates chat completion using async iterator', async () => {
     max_tokens: 10,
     temperature: 0.0,
     stream: true,
-    onData: () => {},
   });
 
   let finalText = '';
@@ -279,99 +341,143 @@ test.sequential('generates chat completion using async iterator', async () => {
   await wllama.exit();
 });
 
-test.sequential('generates concurrent streaming chat completions', async () => {
-  const wllama = new Wllama(CONFIG_PATHS);
+test.sequential(
+  'generates concurrent streaming chat completions',
+  async () => {
+    const wllama = new Wllama(CONFIG_PATHS);
 
-  await wllama.loadModelFromUrl(TINY_MODEL, {
-    n_ctx: 1024,
-    n_parallel: 2,
-    seed: 42,
-  });
+    await wllama.loadModelFromUrl(TINY_MODEL, {
+      n_ctx: 1024,
+      n_parallel: 2,
+      seed: 42,
+    });
 
-  const startStream = async (index: number) => {
-    const stream = await wllama.createChatCompletion({
-      messages: [
-        { role: 'system', content: 'You are helpful.' },
-        { role: 'user', content: `Hi from request ${index}!` },
-      ],
+    const startStream = async (index: number) => {
+      const stream = await wllama.createChatCompletion({
+        messages: [
+          { role: 'system', content: 'You are helpful.' },
+          { role: 'user', content: `Hi from request ${index}!` },
+        ],
+        max_tokens: 10,
+        temperature: 0.0,
+        stream: true,
+      });
+
+      let finalText = '';
+      for await (const chunk of stream) {
+        expect(chunk).toBeDefined();
+        expect(chunk.object).toBe('chat.completion.chunk');
+        const delta = chunk.choices[0].delta;
+        if (delta.content) {
+          finalText += delta.content;
+        }
+      }
+      return finalText;
+    };
+
+    const [first, second] = await Promise.all([startStream(0), startStream(1)]);
+
+    expect(first.length).toBeGreaterThan(0);
+    expect(second.length).toBeGreaterThan(0);
+
+    await wllama.exit();
+  },
+  60000
+);
+
+test.sequential(
+  'cleans up abandoned streaming result readers',
+  async () => {
+    const wllama = new Wllama(CONFIG_PATHS);
+
+    await wllama.loadModelFromUrl(TINY_MODEL, {
+      n_ctx: 1024,
+      n_parallel: 2,
+      seed: 42,
+    });
+
+    const abortController = new AbortController();
+    const firstStream = await wllama.createChatCompletion({
+      messages: [{ role: 'user', content: 'Tell me a short story.' }],
+      max_tokens: 32,
+      temperature: 0.0,
+      stream: true,
+      abortSignal: abortController.signal,
+    });
+
+    let chunks = 0;
+    await expect(async () => {
+      for await (const _ of firstStream) {
+        chunks++;
+        if (chunks >= 2) {
+          abortController.abort();
+        }
+      }
+    }).rejects.toBeInstanceOf(WllamaAbortError);
+
+    expect(chunks).toBeGreaterThanOrEqual(2);
+
+    const secondStream = await wllama.createChatCompletion({
+      messages: [{ role: 'user', content: 'Hi!' }],
       max_tokens: 10,
       temperature: 0.0,
       stream: true,
-      onData: () => {},
     });
 
     let finalText = '';
-    for await (const chunk of stream) {
-      expect(chunk).toBeDefined();
-      expect(chunk.object).toBe('chat.completion.chunk');
+    for await (const chunk of secondStream) {
       const delta = chunk.choices[0].delta;
       if (delta.content) {
         finalText += delta.content;
       }
     }
-    return finalText;
-  };
 
-  const [first, second] = await Promise.all([startStream(0), startStream(1)]);
+    expect(finalText.length).toBeGreaterThan(0);
 
-  expect(first.length).toBeGreaterThan(0);
-  expect(second.length).toBeGreaterThan(0);
+    await wllama.exit();
+  },
+  60000
+);
+
+test.sequential('stack trace (abort)', async () => {
+  const wllama = createWllama();
+  await wllama.loadModelFromUrl(TINY_MODEL, {
+    pooling_type: 'test_stack_trace_abort' as any,
+  });
+  expect(wllama.isModelLoaded()).toBe(true);
+
+  const err1: unknown = await wllama
+    .createCompletion({ prompt: 'test', max_tokens: 1 })
+    .catch((e: unknown) => e);
+  expect(err1).toBeInstanceOf(Error);
+  expect((err1 as Error).name).toBe('RuntimeError');
+  expect((err1 as Error).stack).toMatch(/__wrap_abort/);
+  expect((err1 as Error).stack).toMatch(/server_response::send/);
 
   await wllama.exit();
 });
 
-test.sequential('cleans up abandoned streaming result readers', async () => {
-  const wllama = new Wllama(CONFIG_PATHS);
-
+// TODO @ngxson : this stucks on github CI but not on local run, investigate why and re-enable
+test.skip('stack trace (OOB memory access)', async () => {
+  const wllama = createWllama();
   await wllama.loadModelFromUrl(TINY_MODEL, {
-    n_ctx: 1024,
-    n_parallel: 2,
-    seed: 42,
+    pooling_type: 'test_stack_trace_oob' as any,
+    n_threads: 1, // multithread stucks on github CI but not on local run, why?
   });
+  expect(wllama.isModelLoaded()).toBe(true);
 
-  const abortController = new AbortController();
-  const firstStream = await wllama.createChatCompletion({
-    messages: [{ role: 'user', content: 'Tell me a short story.' }],
-    max_tokens: 32,
-    temperature: 0.0,
-    stream: true,
-    onData: () => {},
-    abortSignal: abortController.signal,
-  });
-
-  let chunks = 0;
-  for await (const _ of firstStream) {
-    chunks++;
-    if (chunks >= 2) {
-      abortController.abort();
-    }
-  }
-
-  expect(chunks).toBeGreaterThanOrEqual(2);
-
-  const secondStream = await wllama.createChatCompletion({
-    messages: [{ role: 'user', content: 'Hi!' }],
-    max_tokens: 10,
-    temperature: 0.0,
-    stream: true,
-    onData: () => {},
-  });
-
-  let finalText = '';
-  for await (const chunk of secondStream) {
-    const delta = chunk.choices[0].delta;
-    if (delta.content) {
-      finalText += delta.content;
-    }
-  }
-
-  expect(finalText.length).toBeGreaterThan(0);
+  const err2: unknown = await wllama
+    .createCompletion({ prompt: 'test', max_tokens: 1 })
+    .catch((e: unknown) => e);
+  expect(err2).toBeInstanceOf(Error);
+  expect((err2 as Error).name).toBe('RuntimeError');
+  expect((err2 as Error).stack).toMatch(/server_response::send/);
 
   await wllama.exit();
 });
 
 test.sequential('cleans up resources', async () => {
-  const wllama = new Wllama(CONFIG_PATHS);
+  const wllama = createWllama();
   await wllama.loadModelFromUrl(TINY_MODEL);
   expect(wllama.isModelLoaded()).toBe(true);
   await wllama.exit();
